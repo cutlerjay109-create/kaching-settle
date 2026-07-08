@@ -37,31 +37,38 @@ jobs:
           echo "Balance:"
           solana balance
 
+      - name: Generate program keypair
+        working-directory: program
+        run: |
+          mkdir -p target/deploy
+          if [ ! -f target/deploy/kaching_settle-keypair.json ]; then
+            solana-keygen new --no-bip39-passphrase               -o target/deploy/kaching_settle-keypair.json
+          fi
+          PROGRAM_ID=$(solana address -k target/deploy/kaching_settle-keypair.json)
+          echo "PROGRAM_ID=$PROGRAM_ID" >> $GITHUB_ENV
+          echo "Program ID: $PROGRAM_ID"
+
+      - name: Update program ID in source
+        working-directory: program
+        run: |
+          PROGRAM_ID=$(solana address -k target/deploy/kaching_settle-keypair.json)
+          sed -i "s/11111111111111111111111111111111/$PROGRAM_ID/g" src/lib.rs
+          sed -i "s/11111111111111111111111111111111/$PROGRAM_ID/g" Anchor.toml
+          echo "Updated program ID to $PROGRAM_ID"
+
       - name: Build
         working-directory: program
         run: anchor build
 
-      - name: Sync program ID and rebuild
-        working-directory: program
-        run: |
-          anchor keys sync
-          PROGRAM_ID=$(solana address -k target/deploy/kaching_settle-keypair.json)
-          echo "PROGRAM_ID=$PROGRAM_ID" >> $GITHUB_ENV
-          echo "Program ID: $PROGRAM_ID"
-          anchor build
-
       - name: Deploy
         working-directory: program
         run: |
-          solana program deploy \
-            target/deploy/kaching_settle.so \
-            --program-id target/deploy/kaching_settle-keypair.json \
-            --url https://api.mainnet-beta.solana.com
+          solana program deploy             target/deploy/kaching_settle.so             --program-id target/deploy/kaching_settle-keypair.json             --url https://api.mainnet-beta.solana.com
           echo "======================================"
           echo "DEPLOYED PROGRAM ID: ${{ env.PROGRAM_ID }}"
           echo "======================================"
 
-      - name: Upload IDL + keypair
+      - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
