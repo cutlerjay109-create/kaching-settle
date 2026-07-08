@@ -5,11 +5,11 @@ import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
-import idl from "../../backend/idl/kaching_settle.json";
+import idl from "./idl.json";
 
 const PROGRAM_ID = new PublicKey("9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B");
-const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"); // mainnet USDC
-const RPC = "https://api.mainnet-beta.solana.com";
+const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"); // mainnet USDC
+const RPC = "https://api.devnet.solana.com";
 
 const SEEDS = {
   MARKET: "market",
@@ -30,9 +30,15 @@ function getProgram(wallet) {
   return new Program(idl, PROGRAM_ID, provider);
 }
 
+function fixtureIdBytes(id) {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(BigInt(id));
+  return buf;
+}
+
 function getMarketPda(fixtureId) {
   const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from(SEEDS.MARKET), Buffer.from(fixtureId.toString())],
+    [Buffer.from(SEEDS.MARKET), fixtureIdBytes(fixtureId)],
     PROGRAM_ID
   );
   return pda;
@@ -41,7 +47,7 @@ function getMarketPda(fixtureId) {
 function getVaultPda(fixtureId, side) {
   const seed = side === 0 ? SEEDS.YES_VAULT : SEEDS.NO_VAULT;
   const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from(seed), Buffer.from(fixtureId.toString())],
+    [Buffer.from(seed), fixtureIdBytes(fixtureId)],
     PROGRAM_ID
   );
   return pda;
@@ -51,7 +57,7 @@ function getPositionPda(fixtureId, userPubkey) {
   const [pda] = PublicKey.findProgramAddressSync(
     [
       Buffer.from(SEEDS.POSITION),
-      Buffer.from(fixtureId.toString()),
+      fixtureIdBytes(fixtureId),
       new PublicKey(userPubkey).toBuffer(),
     ],
     PROGRAM_ID

@@ -4,8 +4,8 @@
 
 const config = {
   // Solana
-  rpc: 'https://api.mainnet-beta.solana.com',
-  network: 'mainnet',
+  rpc: 'https://api.devnet.solana.com',
+  network: 'devnet',
 
   // TxLINE / TxODDS -- mainnet values
   txline: {
@@ -21,7 +21,7 @@ const config = {
   settleProgramId: '9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B',
 
   // Mainnet USDC mint
-  usdcMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  usdcMint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
 };
 
 module.exports = config;

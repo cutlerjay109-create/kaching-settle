@@ -15,12 +15,14 @@
     "@solana/wallet-adapter-react": "^0.15.35",
     "@solana/wallet-adapter-react-ui": "^0.9.35",
     "@solana/web3.js": "^1.95.3",
+    "buffer": "^6.0.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io-client": "^4.8.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
-    "vite": "^5.4.1"
+    "vite": "^5.4.1",
+    "vite-plugin-node-polyfills": "^0.28.0"
   }
 }
