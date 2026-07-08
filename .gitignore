@@ -19,3 +19,8 @@ build/
 
 # OS
 .DS_Store
+wallet-keypair.json
+*.keypair.json
+wallet-keypair.json
+*.json.secret
+keypair.json
