@@ -1,0 +1,370 @@
+{
+  "version": "0.1.0",
+  "name": "kaching_settle",
+  "instructions": [
+    {
+      "name": "createMarket",
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "yesVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "noVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "usdcMint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "associatedTokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "fixtureId",
+          "type": "u64"
+        },
+        {
+          "name": "question",
+          "type": "string"
+        },
+        {
+          "name": "kickoffTs",
+          "type": "i64"
+        },
+        {
+          "name": "statKey",
+          "type": "u32"
+        },
+        {
+          "name": "threshold",
+          "type": "u64"
+        },
+        {
+          "name": "comparison",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "deposit",
+      "accounts": [
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "position",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "userTokenAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "side",
+          "type": "u8"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "lockMarket",
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "settle",
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "winningSide",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "claim",
+      "accounts": [
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "position",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "winningVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "losingVault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "userTokenAccount",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Market",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "fixtureId",
+            "type": "u64"
+          },
+          {
+            "name": "question",
+            "type": "string"
+          },
+          {
+            "name": "kickoffTs",
+            "type": "i64"
+          },
+          {
+            "name": "statKey",
+            "type": "u32"
+          },
+          {
+            "name": "threshold",
+            "type": "u64"
+          },
+          {
+            "name": "comparison",
+            "type": "u8"
+          },
+          {
+            "name": "yesTotal",
+            "type": "u64"
+          },
+          {
+            "name": "noTotal",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "winningSide",
+            "type": "u8"
+          },
+          {
+            "name": "authority",
+            "type": "publicKey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "yesVaultBump",
+            "type": "u8"
+          },
+          {
+            "name": "noVaultBump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Position",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "fixtureId",
+            "type": "u64"
+          },
+          {
+            "name": "user",
+            "type": "publicKey"
+          },
+          {
+            "name": "side",
+            "type": "u8"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "MarketNotOpen",
+      "msg": "Market is not open for deposits"
+    },
+    {
+      "code": 6001,
+      "name": "MarketNotLocked",
+      "msg": "Market is not locked yet"
+    },
+    {
+      "code": 6002,
+      "name": "MarketNotSettled",
+      "msg": "Market is not settled yet"
+    },
+    {
+      "code": 6003,
+      "name": "BelowMinimumStake",
+      "msg": "Deposit amount is below the $1 minimum"
+    },
+    {
+      "code": 6004,
+      "name": "AboveMaximumStake",
+      "msg": "Deposit amount exceeds the $10,000 maximum"
+    },
+    {
+      "code": 6005,
+      "name": "KickoffNotReached",
+      "msg": "Kickoff time has not been reached yet"
+    },
+    {
+      "code": 6006,
+      "name": "KickoffPassed",
+      "msg": "Kickoff has already passed \u2014 deposits closed"
+    },
+    {
+      "code": 6007,
+      "name": "InvalidSide",
+      "msg": "Invalid side \u2014 must be 0 (YES) or 1 (NO)"
+    },
+    {
+      "code": 6008,
+      "name": "AlreadyClaimed",
+      "msg": "This position has already claimed"
+    },
+    {
+      "code": 6009,
+      "name": "WrongSide",
+      "msg": "This position was on the losing side"
+    },
+    {
+      "code": 6010,
+      "name": "NothingToClaim",
+      "msg": "No funds to claim"
+    },
+    {
+      "code": 6011,
+      "name": "Unauthorized",
+      "msg": "Unauthorized \u2014 only the keeper can settle"
+    }
+  ]
+}
