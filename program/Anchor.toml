@@ -1,6 +1,12 @@
+[toolchain]
+anchor_version = "0.30.1"
+
 [features]
 resolution = true
 skip-lint = false
+
+[workspace]
+members = ["programs/kaching-settle"]
 
 [programs.mainnet]
 kaching_settle = "11111111111111111111111111111111"
