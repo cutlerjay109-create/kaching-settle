@@ -21,6 +21,7 @@ jobs:
           anchor-version: "0.30.1"
           solana-cli-version: "2.1.21"
           node-version: "20"
+          rust-version: "1.85.0"
 
       - name: Verify tools
         run: |
