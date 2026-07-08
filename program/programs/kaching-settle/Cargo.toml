@@ -17,10 +17,3 @@ default = []
 [dependencies]
 anchor-lang = "=0.28.0"
 anchor-spl = "=0.28.0"
-
-[patch.crates-io]
-zeroize_derive = { version = "=1.4.2" }
-cpufeatures = { version = "=0.2.12" }
-toml_datetime = { version = "=0.6.3" }
-crypto-common = { version = "=0.1.6" }
-hashbrown = { version = "=0.14.5" }
