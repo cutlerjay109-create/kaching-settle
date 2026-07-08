@@ -15,15 +15,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Solana
+      - name: Install Solana 2.2.14
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/v2.1.21/install)"
+          sh -c "$(curl -sSfL https://release.anza.xyz/v2.2.14/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
-      - name: Verify Solana
+      - name: Check bundled Rust version
         run: |
           solana --version
           cargo-build-sbf --version
+          rustc --version
 
       - name: Setup wallet
         run: |
@@ -43,7 +44,7 @@ jobs:
           echo "PROGRAM_ID=$PROGRAM_ID" >> $GITHUB_ENV
           echo "Program ID: $PROGRAM_ID"
 
-      - name: Update program ID in source
+      - name: Update program ID
         working-directory: program
         run: |
           PROGRAM_ID=$(solana address -k target/deploy/kaching_settle-keypair.json)
@@ -51,11 +52,11 @@ jobs:
             programs/kaching-settle/src/lib.rs Anchor.toml
           echo "Updated to: $PROGRAM_ID"
 
-      - name: Build with cargo-build-sbf
+      - name: Build
         working-directory: program
         run: |
           cargo-build-sbf --manifest-path programs/kaching-settle/Cargo.toml
-          echo "Build complete. Artifacts:"
+          echo "Build artifacts:"
           find . -name "*.so" 2>/dev/null
 
       - name: Deploy
