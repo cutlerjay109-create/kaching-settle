@@ -1,15 +1,9 @@
 [features]
-resolution = "workspace"
+resolution = true
 skip-lint = false
 
 [programs.mainnet]
-kaching_settle = "PLACEHOLDER_PROGRAM_ID"
-
-[programs.devnet]
-kaching_settle = "PLACEHOLDER_PROGRAM_ID"
-
-[registry]
-url = "https://api.apr.dev"
+kaching_settle = "11111111111111111111111111111111"
 
 [provider]
 cluster = "mainnet"
