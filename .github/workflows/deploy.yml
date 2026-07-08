@@ -15,16 +15,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Solana + Anchor (prebuilt)
-        uses: metadaoproject/setup-anchor@v3.1
+      - name: Install Rust 1.85
+        uses: dtolnay/rust-toolchain@stable
         with:
-          anchor-version: "0.30.1"
-          solana-cli-version: "2.1.21"
-          node-version: "20"
-          rust-version: "1.85.0"
+          toolchain: "1.85.0"
+
+      - name: Install Solana
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v2.1.21/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor CLI
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor \
+            --tag v0.30.1 anchor-cli --locked
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Verify tools
         run: |
+          rustc --version
           solana --version
           anchor --version
 
@@ -33,7 +42,7 @@ jobs:
           mkdir -p ~/.config/solana
           echo '${{ secrets.WALLET_KEYPAIR_JSON }}' > ~/.config/solana/id.json
           solana config set --url https://api.mainnet-beta.solana.com
-          echo "Deployer address:"
+          echo "Deployer:"
           solana address
           echo "Balance:"
           solana balance
@@ -42,7 +51,8 @@ jobs:
         working-directory: program
         run: |
           mkdir -p target/deploy
-          solana-keygen new --no-bip39-passphrase             -o target/deploy/kaching_settle-keypair.json --force
+          solana-keygen new --no-bip39-passphrase \
+            -o target/deploy/kaching_settle-keypair.json --force
           PROGRAM_ID=$(solana address -k target/deploy/kaching_settle-keypair.json)
           echo "PROGRAM_ID=$PROGRAM_ID" >> $GITHUB_ENV
           echo "Program ID: $PROGRAM_ID"
@@ -51,27 +61,28 @@ jobs:
         working-directory: program
         run: |
           PROGRAM_ID=$(solana address -k target/deploy/kaching_settle-keypair.json)
-          sed -i "s/11111111111111111111111111111111/$PROGRAM_ID/g" src/lib.rs
-          sed -i "s/11111111111111111111111111111111/$PROGRAM_ID/g" Anchor.toml
+          sed -i "s/11111111111111111111111111111111/$PROGRAM_ID/g" \
+            programs/kaching-settle/src/lib.rs Anchor.toml
           echo "Updated to: $PROGRAM_ID"
 
       - name: Build
         working-directory: program
         run: |
           anchor build
-          echo "Build output:"
+          echo "Build artifacts:"
           find . -name "*.so" 2>/dev/null
-          find . -name "kaching_settle*" 2>/dev/null
+          find . -name "kaching_settle.json" 2>/dev/null
 
       - name: Deploy
         working-directory: program
         run: |
-          # Find the .so file wherever anchor put it
-          SO_FILE=$(find . -name "kaching_settle.so" | head -1)
-          echo "Found .so at: $SO_FILE"
-          solana program deploy             "$SO_FILE"             --program-id target/deploy/kaching_settle-keypair.json             --url https://api.mainnet-beta.solana.com
+          SO=$(find . -name "kaching_settle.so" | head -1)
+          echo "Deploying: $SO"
+          solana program deploy "$SO" \
+            --program-id target/deploy/kaching_settle-keypair.json \
+            --url https://api.mainnet-beta.solana.com
           echo "======================================"
-          echo "DEPLOYED PROGRAM ID: ${{ env.PROGRAM_ID }}"
+          echo "PROGRAM ID: ${{ env.PROGRAM_ID }}"
           echo "======================================"
 
       - name: Upload artifacts
