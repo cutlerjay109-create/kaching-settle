@@ -1,0 +1,20 @@
+[package]
+name = "kaching-settle"
+version = "0.1.0"
+description = "Trustless match settlement using TxLINE Merkle proofs"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "kaching_settle"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.30.1"
+anchor-spl = { version = "0.30.1", features = ["token", "associated_token"] }

@@ -1,0 +1,21 @@
+# Environment and secrets
+backend/.env
+*.env
+
+# Wallet keypairs — never commit these
+*.json.secret
+keypair.json
+
+# Dependencies
+node_modules/
+target/
+
+# Build output
+dist/
+build/
+
+# Anchor
+.anchor/
+
+# OS
+.DS_Store
