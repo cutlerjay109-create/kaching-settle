@@ -13,7 +13,7 @@ const auth = require("./txline/auth");
 const stream = require("./txline/stream");
 const { fetchFixtures, getUpcoming } = require("./txline/fixtures");
 const keeper = require("./keeper/settle-trigger");
-const { autoCreateMarkets } = require("./keeper/auto-market");
+const { autoCreateMarkets, setMarketCreatedCallback } = require("./keeper/auto-market");
 const sockets = require("./sockets");
 
 const app = express();
@@ -79,6 +79,19 @@ async function start() {
 
     // Init sockets
     sockets.init(io);
+
+    // Wire auto-market to keeper so new markets are watched automatically
+    setMarketCreatedCallback((fixture) => {
+      keeper.registerMarket({
+        fixtureId: fixture.fixtureId,
+        marketId: fixture.fixtureId,
+        question: `Will ${fixture.home} score a goal against ${fixture.away}?`,
+        statKey: 1,
+        threshold: 0,
+        comparison: "greaterThan",
+        status: "active",
+      });
+    });
 
     // Auto-create markets for all fixtures
     await autoCreateMarkets();

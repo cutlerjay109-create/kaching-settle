@@ -1,13 +1,16 @@
 // shared/config.js
-// Single source of truth for all network config.
-// MAINNET -- real World Cup data, real score proofs.
+// Network: DEVNET
+// - Solana program deployed on devnet
+// - TxLINE data from mainnet API (free World Cup tier)
+// - Devnet USDC for testing
 
 const config = {
-  // Solana
+  // Solana — devnet (program is here)
   rpc: 'https://api.devnet.solana.com',
   network: 'devnet',
 
-  // TxLINE / TxODDS -- mainnet values
+  // TxLINE / TxODDS — mainnet API (has real World Cup data)
+  // Note: TxLINE data API is separate from Solana cluster
   txline: {
     host: 'https://txline.txodds.com',
     programId: '9ExbZjAapQww1vfcisDmrngPinHTEfpjYRWMunJgcKaA',
@@ -17,10 +20,10 @@ const config = {
     leagues: [],
   },
 
-  // Our vault program (filled after deploy)
+  // Our vault program — deployed on devnet
   settleProgramId: '9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B',
 
-  // Mainnet USDC mint
+  // Devnet USDC mint
   usdcMint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
 };
 

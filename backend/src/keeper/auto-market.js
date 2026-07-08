@@ -125,6 +125,12 @@ async function createMarketForFixture(connection, wallet, fixture) {
   return sig;
 }
 
+let onMarketCreated = null;
+
+function setMarketCreatedCallback(cb) {
+  onMarketCreated = cb;
+}
+
 async function autoCreateMarkets() {
   if (!config.settleProgramId) return;
 
@@ -145,6 +151,7 @@ async function autoCreateMarkets() {
       console.log(`[auto-market] Creating market: ${fixture.home} vs ${fixture.away}`);
       const sig = await createMarketForFixture(connection, wallet, fixture);
       console.log(`[auto-market] Created: ${sig}`);
+      if (onMarketCreated) onMarketCreated(fixture);
 
       // Small delay between transactions
       await new Promise(r => setTimeout(r, 1000));
@@ -156,4 +163,4 @@ async function autoCreateMarkets() {
   console.log("[auto-market] Done checking fixtures");
 }
 
-module.exports = { autoCreateMarkets };
+module.exports = { autoCreateMarkets, setMarketCreatedCallback };
