@@ -6,7 +6,7 @@ skip-lint = false
 members = ["programs/kaching-settle"]
 
 [programs.mainnet]
-kaching_settle = "11111111111111111111111111111111"
+kaching_settle = "9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B"
 
 [provider]
 cluster = "mainnet"

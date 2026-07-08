@@ -18,7 +18,7 @@ const config = {
   },
 
   // Our vault program (filled after deploy)
-  settleProgramId: '',
+  settleProgramId: '9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B',
 
   // Mainnet USDC mint
   usdcMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
