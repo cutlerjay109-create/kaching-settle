@@ -15,20 +15,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust 1.85
+      - name: Install Rust 1.80
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85.0"
+          toolchain: "1.80.0"
 
       - name: Install Solana
         run: |
           sh -c "$(curl -sSfL https://release.anza.xyz/v2.1.21/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Install Anchor CLI
         run: |
           cargo install --git https://github.com/coral-xyz/anchor \
-            --tag v0.30.1 anchor-cli --locked
+            --tag v0.30.1 anchor-cli --locked \
+            --config "net.git-fetch-with-cli=true"
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Verify tools
@@ -42,9 +51,7 @@ jobs:
           mkdir -p ~/.config/solana
           echo '${{ secrets.WALLET_KEYPAIR_JSON }}' > ~/.config/solana/id.json
           solana config set --url https://api.mainnet-beta.solana.com
-          echo "Deployer:"
           solana address
-          echo "Balance:"
           solana balance
 
       - name: Generate program keypair
@@ -67,11 +74,11 @@ jobs:
 
       - name: Build
         working-directory: program
-        run: |
-          anchor build
-          echo "Build artifacts:"
-          find . -name "*.so" 2>/dev/null
-          find . -name "kaching_settle.json" 2>/dev/null
+        run: anchor build
+
+      - name: Show build artifacts
+        working-directory: program
+        run: find . -name "*.so" -o -name "kaching_settle.json" 2>/dev/null
 
       - name: Deploy
         working-directory: program
