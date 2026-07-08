@@ -1,15 +1,25 @@
-import { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
-import { Program, AnchorProvider, BN } from "@coral-xyz/anchor";
+import {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+} from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
-import idl from "./idl.json";
+import { Buffer } from "buffer";
 
 const PROGRAM_ID = new PublicKey("9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B");
-const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"); // mainnet USDC
+const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 const RPC = "https://api.devnet.solana.com";
+
+// Anchor discriminators = sha256("global:<name>")[0..8]
+const DISC = {
+  deposit: Buffer.from([242, 35, 198, 137, 82, 225, 242, 182]),
+  claim: Buffer.from([62, 198, 214, 193, 213, 159, 108, 210]),
+};
 
 const SEEDS = {
   MARKET: "market",
@@ -22,163 +32,144 @@ export function getConnection() {
   return new Connection(RPC, "confirmed");
 }
 
-function getProgram(wallet) {
-  const connection = getConnection();
-  const provider = new AnchorProvider(connection, wallet, {
-    commitment: "confirmed",
-  });
-  return new Program(idl, PROGRAM_ID, provider);
-}
-
 function fixtureIdBytes(id) {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64LE(BigInt(id));
   return buf;
 }
 
-function getMarketPda(fixtureId) {
-  const [pda] = PublicKey.findProgramAddressSync(
+function u64le(n) {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(BigInt(n));
+  return buf;
+}
+
+export function getMarketPda(fixtureId) {
+  return PublicKey.findProgramAddressSync(
     [Buffer.from(SEEDS.MARKET), fixtureIdBytes(fixtureId)],
     PROGRAM_ID
-  );
-  return pda;
+  )[0];
 }
 
-function getVaultPda(fixtureId, side) {
+export function getVaultPda(fixtureId, side) {
   const seed = side === 0 ? SEEDS.YES_VAULT : SEEDS.NO_VAULT;
-  const [pda] = PublicKey.findProgramAddressSync(
+  return PublicKey.findProgramAddressSync(
     [Buffer.from(seed), fixtureIdBytes(fixtureId)],
     PROGRAM_ID
-  );
-  return pda;
+  )[0];
 }
 
-function getPositionPda(fixtureId, userPubkey) {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [
-      Buffer.from(SEEDS.POSITION),
-      fixtureIdBytes(fixtureId),
-      new PublicKey(userPubkey).toBuffer(),
-    ],
+export function getPositionPda(fixtureId, user) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(SEEDS.POSITION), fixtureIdBytes(fixtureId), new PublicKey(user).toBuffer()],
     PROGRAM_ID
-  );
-  return pda;
+  )[0];
 }
 
-export async function createMarket(wallet, { fixtureId, question, kickoffTs, statKey, threshold, comparison }) {
-  const program = getProgram(wallet);
-  const marketPda = getMarketPda(fixtureId);
-  const yesVaultPda = getVaultPda(fixtureId, 0);
-  const noVaultPda = getVaultPda(fixtureId, 1);
+function acc(pubkey, isSigner, isWritable) {
+  return { pubkey, isSigner, isWritable };
+}
 
-  const tx = await program.methods
-    .createMarket(
-      new BN(fixtureId),
-      question,
-      new BN(kickoffTs),
-      statKey,
-      new BN(threshold),
-      comparison
-    )
-    .accounts({
-      authority: wallet.publicKey,
-      market: marketPda,
-      yesVault: yesVaultPda,
-      noVault: noVaultPda,
-      usdcMint: USDC_MINT,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-      rent: SYSVAR_RENT_PUBKEY,
-    })
-    .rpc();
-
-  return { tx, marketPda: marketPda.toBase58() };
+async function sendIx(wallet, ix) {
+  const connection = getConnection();
+  const tx = new Transaction().add(ix);
+  tx.feePayer = wallet.publicKey;
+  tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+  const signed = await wallet.signTransaction(tx);
+  const sig = await connection.sendRawTransaction(signed.serialize());
+  await connection.confirmTransaction(sig, "confirmed");
+  return sig;
 }
 
 export async function deposit(wallet, { fixtureId, side, amountUsdc }) {
-  const program = getProgram(wallet);
-  const marketPda = getMarketPda(fixtureId);
-  const vaultPda = getVaultPda(fixtureId, side);
-  const positionPda = getPositionPda(fixtureId, wallet.publicKey);
-
-  const userTokenAccount = getAssociatedTokenAddressSync(
-    USDC_MINT,
-    wallet.publicKey,
-    false,
-    TOKEN_PROGRAM_ID
+  const market = getMarketPda(fixtureId);
+  const vault = getVaultPda(fixtureId, side);
+  const position = getPositionPda(fixtureId, wallet.publicKey);
+  const userToken = getAssociatedTokenAddressSync(
+    USDC_MINT, wallet.publicKey, false, TOKEN_PROGRAM_ID
   );
 
-  const amountLamports = new BN(Math.floor(amountUsdc * 1_000_000));
+  const amount = Math.floor(amountUsdc * 1_000_000);
+  const data = Buffer.concat([
+    DISC.deposit,
+    Buffer.from([side]),
+    u64le(amount),
+  ]);
 
-  const tx = await program.methods
-    .deposit(side, amountLamports)
-    .accounts({
-      user: wallet.publicKey,
-      market: marketPda,
-      position: positionPda,
-      vault: vaultPda,
-      userTokenAccount,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .rpc();
+  const ix = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      acc(wallet.publicKey, true, true),
+      acc(market, false, true),
+      acc(position, false, true),
+      acc(vault, false, true),
+      acc(userToken, false, true),
+      acc(TOKEN_PROGRAM_ID, false, false),
+      acc(SystemProgram.programId, false, false),
+    ],
+    data,
+  });
 
+  const tx = await sendIx(wallet, ix);
   return { tx };
 }
 
 export async function claim(wallet, { fixtureId, winningSide }) {
-  const program = getProgram(wallet);
-  const marketPda = getMarketPda(fixtureId);
-  const positionPda = getPositionPda(fixtureId, wallet.publicKey);
+  const market = getMarketPda(fixtureId);
+  const position = getPositionPda(fixtureId, wallet.publicKey);
   const winningVault = getVaultPda(fixtureId, winningSide);
   const losingVault = getVaultPda(fixtureId, winningSide === 0 ? 1 : 0);
-
-  const userTokenAccount = getAssociatedTokenAddressSync(
-    USDC_MINT,
-    wallet.publicKey,
-    false,
-    TOKEN_PROGRAM_ID
+  const userToken = getAssociatedTokenAddressSync(
+    USDC_MINT, wallet.publicKey, false, TOKEN_PROGRAM_ID
   );
 
-  const tx = await program.methods
-    .claim()
-    .accounts({
-      user: wallet.publicKey,
-      market: marketPda,
-      position: positionPda,
-      winningVault,
-      losingVault,
-      userTokenAccount,
-      tokenProgram: TOKEN_PROGRAM_ID,
-    })
-    .rpc();
+  const ix = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      acc(wallet.publicKey, true, true),
+      acc(market, false, false),
+      acc(position, false, true),
+      acc(winningVault, false, true),
+      acc(losingVault, false, true),
+      acc(userToken, false, true),
+      acc(TOKEN_PROGRAM_ID, false, false),
+    ],
+    data: DISC.claim,
+  });
 
+  const tx = await sendIx(wallet, ix);
   return { tx };
 }
 
+// Manually decode Market account (no Anchor needed)
 export async function getMarket(fixtureId) {
   const connection = getConnection();
-  const provider = new AnchorProvider(connection, {
-    publicKey: PublicKey.default,
-    signTransaction: async t => t,
-    signAllTransactions: async t => t,
-  }, { commitment: "confirmed" });
-  const program = new Program(idl, PROGRAM_ID, provider);
-  const marketPda = getMarketPda(fixtureId);
+  const pda = getMarketPda(fixtureId);
+  const info = await connection.getAccountInfo(pda);
+  if (!info) return null;
 
-  try {
-    const market = await program.account.market.fetch(marketPda);
-    return {
-      fixtureId: market.fixtureId.toNumber(),
-      question: market.question,
-      kickoffTs: market.kickoffTs.toNumber(),
-      yesTotal: market.yesTotal.toNumber() / 1_000_000,
-      noTotal: market.noTotal.toNumber() / 1_000_000,
-      status: market.status,
-      winningSide: market.winningSide,
-    };
-  } catch {
-    return null;
-  }
+  const d = info.data;
+  let o = 8; // skip discriminator
+
+  const fid = d.readBigUInt64LE(o); o += 8;
+  const qLen = d.readUInt32LE(o); o += 4;
+  const question = d.slice(o, o + qLen).toString("utf8"); o += qLen;
+  const kickoffTs = d.readBigInt64LE(o); o += 8;
+  o += 4;  // stat_key
+  o += 8;  // threshold
+  o += 1;  // comparison
+  const yesTotal = d.readBigUInt64LE(o); o += 8;
+  const noTotal = d.readBigUInt64LE(o); o += 8;
+  const status = d.readUInt8(o); o += 1;
+  const winningSide = d.readUInt8(o); o += 1;
+
+  return {
+    fixtureId: Number(fid),
+    question,
+    kickoffTs: Number(kickoffTs),
+    yesTotal: Number(yesTotal) / 1_000_000,
+    noTotal: Number(noTotal) / 1_000_000,
+    status,
+    winningSide,
+  };
 }

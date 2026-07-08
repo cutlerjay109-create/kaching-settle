@@ -7,6 +7,7 @@ import PotMeter from "../components/PotMeter";
 import VoicePlayer from "../components/VoicePlayer";
 import Receipt from "../components/Receipt";
 import { connectSocket } from "../lib/socket";
+import { getMarket } from "../lib/solana";
 
 const BACKEND = "http://localhost:3001";
 
@@ -27,6 +28,14 @@ export default function MarketView({ fixtureId, onBack }) {
         const f = data.find(x => x.fixtureId === fixtureId);
         setFixture(f || null);
       });
+
+    // Load on-chain pot sizes
+    getMarket(fixtureId).then(market => {
+      if (market) {
+        setYesPot(market.yesTotal);
+        setNoPot(market.noTotal);
+      }
+    }).catch(() => {});
 
     const socket = connectSocket(BACKEND);
     socket.emit("subscribe-market", fixtureId);
@@ -80,6 +89,12 @@ export default function MarketView({ fixtureId, onBack }) {
               onDeposit={(side, amount) => {
                 if (side === "YES") setYesPot(p => p + amount);
                 else setNoPot(p => p + amount);
+                // Refresh from chain after deposit
+                setTimeout(() => {
+                  getMarket(fixtureId).then(m => {
+                    if (m) { setYesPot(m.yesTotal); setNoPot(m.noTotal); }
+                  }).catch(() => {});
+                }, 2000);
               }}
             />
           ) : (
