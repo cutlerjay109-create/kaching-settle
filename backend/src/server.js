@@ -13,6 +13,7 @@ const auth = require("./txline/auth");
 const stream = require("./txline/stream");
 const { fetchFixtures, getUpcoming } = require("./txline/fixtures");
 const keeper = require("./keeper/settle-trigger");
+const { autoCreateMarkets } = require("./keeper/auto-market");
 const sockets = require("./sockets");
 
 const app = express();
@@ -78,6 +79,11 @@ async function start() {
 
     // Init sockets
     sockets.init(io);
+
+    // Auto-create markets for all fixtures
+    await autoCreateMarkets();
+    // Re-check every hour in case new fixtures appear
+    setInterval(autoCreateMarkets, 60 * 60 * 1000);
 
     // Start keeper — checks for completed fixtures every 60s
     keeper.onSettle((settlement) => {
