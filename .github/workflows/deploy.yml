@@ -15,16 +15,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Solana 2.2.14
+      - name: Install Solana 2.1.21
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/v2.2.14/install)"
+          sh -c "$(curl -sSfL https://release.anza.xyz/v2.1.21/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
-
-      - name: Check bundled Rust version
-        run: |
-          solana --version
-          cargo-build-sbf --version
-          rustc --version
 
       - name: Setup wallet
         run: |
@@ -51,6 +45,20 @@ jobs:
           sed -i "s/11111111111111111111111111111111/$PROGRAM_ID/g" \
             programs/kaching-settle/src/lib.rs Anchor.toml
           echo "Updated to: $PROGRAM_ID"
+
+      - name: Pin dependencies to Rust 1.79 compatible versions
+        working-directory: program
+        run: |
+          cargo-build-sbf --manifest-path programs/kaching-settle/Cargo.toml \
+            -- --version || true
+          cargo update --manifest-path programs/kaching-settle/Cargo.toml \
+            zeroize_derive --precise 1.4.2 || true
+          cargo update --manifest-path programs/kaching-settle/Cargo.toml \
+            toml_datetime --precise 0.6.8 || true
+          cargo update --manifest-path programs/kaching-settle/Cargo.toml \
+            crypto-common --precise 0.1.6 || true
+          cargo update --manifest-path programs/kaching-settle/Cargo.toml \
+            hashbrown --precise 0.14.5 || true
 
       - name: Build
         working-directory: program
