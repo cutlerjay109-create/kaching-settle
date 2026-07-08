@@ -1,48 +1,97 @@
 name: Deploy Solana Program
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - 'program/**'
       - '.github/workflows/deploy.yml'
-  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    container:
-      image: projectserum/build:v0.27.0
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.79.0
+
+      - name: Cache Solana + Anchor
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.cargo/bin/anchor
+            ~/.avm
+          key: solana-anchor-v0301-agave-2121
+
+      - name: Install Solana
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v2.1.21/install)"
+
+      - name: Add Solana to PATH
+        run: echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install AVM + Anchor
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install 0.30.1
+          avm use 0.30.1
+
+      - name: Add Anchor to PATH
+        run: echo "$HOME/.avm/bin" >> $GITHUB_PATH
+
       - name: Verify tools
         run: |
-          anchor --version
           solana --version
-          rustc --version
+          anchor --version || (~/.avm/bin/anchor --version)
 
       - name: Setup wallet
         run: |
           mkdir -p ~/.config/solana
           echo '${{ secrets.WALLET_KEYPAIR_JSON }}' > ~/.config/solana/id.json
           solana config set --url mainnet-beta
+          echo "Deployer address:"
           solana address
+          echo "Balance:"
+          solana balance
 
-      - name: Check SOL balance
-        run: solana balance
-
-      - name: Build program
+      - name: Build
         working-directory: program
         run: anchor build
 
-      - name: Deploy program
+      - name: Sync program ID
         working-directory: program
         run: |
-          anchor deploy --provider.cluster mainnet-beta
+          anchor keys sync || true
           PROGRAM_ID=$(solana address -k target/deploy/kaching_settle-keypair.json)
-          echo "=============================="
-          echo "PROGRAM ID: $PROGRAM_ID"
-          echo "=============================="
+          echo "PROGRAM_ID=$PROGRAM_ID" >> $GITHUB_ENV
+          echo "Program ID will be: $PROGRAM_ID"
+
+      - name: Rebuild with synced ID
+        working-directory: program
+        run: anchor build
+
+      - name: Deploy
+        working-directory: program
+        run: |
+          solana program deploy \
+            target/deploy/kaching_settle.so \
+            --program-id target/deploy/kaching_settle-keypair.json \
+            --url mainnet-beta
+          echo "======================================"
+          echo "DEPLOYED PROGRAM ID: ${{ env.PROGRAM_ID }}"
+          echo "======================================"
+
+      - name: Upload IDL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: program-idl
+          path: |
+            program/target/idl/kaching_settle.json
+            program/target/deploy/kaching_settle-keypair.json
