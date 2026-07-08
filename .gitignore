@@ -24,3 +24,6 @@ wallet-keypair.json
 wallet-keypair.json
 *.json.secret
 keypair.json
+wallet-keypair.json
+keypair.json
+*.json.secret
