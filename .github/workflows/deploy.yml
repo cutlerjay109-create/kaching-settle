@@ -49,16 +49,17 @@ jobs:
       - name: Pin dependencies to Rust 1.79 compatible versions
         working-directory: program
         run: |
-          cargo-build-sbf --manifest-path programs/kaching-settle/Cargo.toml \
-            -- --version || true
-          cargo update --manifest-path programs/kaching-settle/Cargo.toml \
-            zeroize_derive --precise 1.4.2 || true
-          cargo update --manifest-path programs/kaching-settle/Cargo.toml \
-            toml_datetime --precise 0.6.8 || true
-          cargo update --manifest-path programs/kaching-settle/Cargo.toml \
-            crypto-common --precise 0.1.6 || true
-          cargo update --manifest-path programs/kaching-settle/Cargo.toml \
-            hashbrown --precise 0.14.5 || true
+          # Generate initial Cargo.lock
+          cargo generate-lockfile || true
+          # Pin each problematic crate to last version before edition2024
+          cargo update -p zeroize_derive --precise 1.4.2 || true
+          cargo update -p cpufeatures --precise 0.2.12 || true
+          cargo update -p toml_datetime --precise 0.6.3 || true
+          cargo update -p crypto-common --precise 0.1.6 || true
+          cargo update -p hashbrown --precise 0.14.5 || true
+          cargo update -p digest --precise 0.10.7 || true
+          cargo update -p signature --precise 2.1.0 || true
+          echo "Lockfile generated with pinned deps" 
 
       - name: Build
         working-directory: program
