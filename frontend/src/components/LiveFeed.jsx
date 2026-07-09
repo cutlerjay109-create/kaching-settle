@@ -10,7 +10,7 @@ export default function LiveFeed({ score, events, fixture }) {
         </div>
         <div className="score-divider">
           <span className="period">{getPeriodLabel(score?.period)}</span>
-          <span className="minute">{score?.minute ? `${score.minute}'` : ""}</span>
+          <span className="minute">{score?.minute ? formatMinute(score.minute, score?.period) : ""}</span>
         </div>
         <div className="team away">
           <span className="goals">{score?.awayGoals ?? 0}</span>
@@ -36,8 +36,24 @@ function getPeriodLabel(period) {
   if (period === 1) return "1st Half";
   if (period === 2) return "2nd Half";
   if (period === 3) return "HT";
+  if (period === 4) return "Extra Time";
   if (period === 5) return "FT";
+  if (period === 6) return "AET";
+  if (period === 7) return "Penalties";
   return "Live";
+}
+
+function formatMinute(minute, period) {
+  if (!minute) return "";
+  // Handle stoppage time in first half
+  if (period === 1 && minute > 45) {
+    return `45+${minute - 45}'`;
+  }
+  // Handle stoppage time in second half
+  if (period === 2 && minute > 90) {
+    return `90+${minute - 90}'`;
+  }
+  return `${minute}'`;
 }
 
 function getEventIcon(type) {

@@ -23,12 +23,25 @@ function normalizeFixture(f) {
 }
 
 function normalizeScore(s) {
+  // Handle both raw minute (46) and compound (45+1) formats
+  let minute = s.Minute ?? s.MatchMinute ?? 0;
+  let extraTime = s.ExtraTime ?? s.InjuryTime ?? s.AddedTime ?? 0;
+  let period = s.Period ?? s.GamePhase ?? s.Phase ?? 0;
+
+  // If TxLINE sends separate extra time field, combine into flat minute
+  // e.g. minute=45, extraTime=2 -> display as 45+2
+  // We pass both so LiveFeed can format correctly
+  if (extraTime > 0) {
+    minute = (period === 1 ? 45 : 90) + extraTime;
+  }
+
   return {
     fixtureId: s.FixtureId,
     homeGoals: s.Participant1Goals ?? s.HomeGoals ?? 0,
     awayGoals: s.Participant2Goals ?? s.AwayGoals ?? 0,
-    period: s.Period ?? s.GamePhase ?? 0,
-    minute: s.Minute ?? 0,
+    period,
+    minute,
+    extraTime,
     ts: s.Ts ?? Date.now(),
   };
 }
