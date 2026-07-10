@@ -259,33 +259,105 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "void_market",
+      "discriminator": [
+        243,
+        175,
+        46,
+        124,
+        95,
+        101,
+        39,
+        69
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "signer": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "refund",
+      "discriminator": [
+        2,
+        96,
+        183,
+        251,
+        63,
+        208,
+        46,
+        46
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": false,
+          "signer": false
+        },
+        {
+          "name": "position",
+          "writable": true,
+          "signer": false
+        },
+        {
+          "name": "user_vault",
+          "writable": true,
+          "signer": false
+        },
+        {
+          "name": "user_token_account",
+          "writable": true,
+          "signer": false
+        },
+        {
+          "name": "token_program",
+          "writable": false,
+          "signer": false
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
     {
       "name": "Market",
       "discriminator": [
-        212,
-        209,
-        105,
-        59,
-        171,
-        169,
-        41,
-        228
+        205,
+        32,
+        141,
+        28,
+        180,
+        73,
+        192,
+        229
       ]
     },
     {
       "name": "Position",
       "discriminator": [
-        4,
-        29,
-        108,
-        22,
-        154,
-        72,
-        119,
-        80
+        162,
+        191,
+        156,
+        34,
+        151,
+        131,
+        65,
+        140
       ]
     }
   ],
@@ -447,6 +519,21 @@
       "code": 6011,
       "name": "Unauthorized",
       "msg": "Unauthorized"
+    },
+    {
+      "code": 6012,
+      "name": "CannotVoid",
+      "msg": "Cannot void \u2014 both sides have funds"
+    },
+    {
+      "code": 6013,
+      "name": "MarketNotVoid",
+      "msg": "Market is not voided"
+    },
+    {
+      "code": 6014,
+      "name": "AlreadyRefunded",
+      "msg": "Already refunded"
     }
   ]
 }

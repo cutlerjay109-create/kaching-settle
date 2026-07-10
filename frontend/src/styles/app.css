@@ -147,3 +147,16 @@ code { background: #1e1e2e; padding: 2px 4px; border-radius: 4px; font-size: 11p
 /* Loading / Empty */
 .loading { text-align: center; padding: 40px; color: #666; }
 .empty { color: #666; text-align: center; padding: 24px; }
+
+/* Match locked state */
+.match-locked {
+  background: #12121e;
+  border: 1px solid #1e1e2e;
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+.match-locked p { color: #888; font-size: 15px; }
+.match-locked p:first-child { color: #4ade80; font-weight: 700; font-size: 16px; margin-bottom: 8px; }
+.locked-sub { font-size: 13px; color: #666; }

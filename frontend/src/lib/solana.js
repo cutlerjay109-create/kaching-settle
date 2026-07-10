@@ -19,6 +19,8 @@ const RPC = "https://api.devnet.solana.com";
 const DISC = {
   deposit: Buffer.from([242, 35, 198, 137, 82, 225, 242, 182]),
   claim: Buffer.from([62, 198, 214, 193, 213, 159, 108, 210]),
+  void_market: Buffer.from([243, 175, 46, 124, 95, 101, 39, 69]),
+  refund: Buffer.from([2, 96, 183, 251, 63, 208, 46, 46]),
 };
 
 const SEEDS = {
@@ -142,6 +144,47 @@ export async function claim(wallet, { fixtureId, winningSide }) {
 }
 
 // Manually decode Market account (no Anchor needed)
+export async function voidMarket(wallet, { fixtureId }) {
+  const market = getMarketPda(fixtureId);
+
+  const ix = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      acc(wallet.publicKey, true, false),
+      acc(market, false, true),
+    ],
+    data: DISC.void_market,
+  });
+
+  const tx = await sendIx(wallet, ix);
+  return { tx };
+}
+
+export async function refund(wallet, { fixtureId, side }) {
+  const market = getMarketPda(fixtureId);
+  const position = getPositionPda(fixtureId, wallet.publicKey);
+  const userVault = getVaultPda(fixtureId, side);
+  const userToken = getAssociatedTokenAddressSync(
+    USDC_MINT, wallet.publicKey, false, TOKEN_PROGRAM_ID
+  );
+
+  const ix = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      acc(wallet.publicKey, true, true),
+      acc(market, false, false),
+      acc(position, false, true),
+      acc(userVault, false, true),
+      acc(userToken, false, true),
+      acc(TOKEN_PROGRAM_ID, false, false),
+    ],
+    data: DISC.refund,
+  });
+
+  const tx = await sendIx(wallet, ix);
+  return { tx };
+}
+
 export async function getMarket(fixtureId) {
   const connection = getConnection();
   const pda = getMarketPda(fixtureId);

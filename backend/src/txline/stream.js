@@ -1,31 +1,29 @@
 // backend/src/txline/stream.js
-// Connects to TxLINE's live SSE score stream.
-// Emits events to the rest of the app via a callback.
+// Connects to TxLINE live SSE stream.
+// Every event contains full Stats + Clock + Action.
 
 const EventSource = require("eventsource");
 const { makeHeaders } = require("./auth");
-const { normalizeScore, normalizeEvent } = require("./normalize");
+const { normalizeScore, normalizeEvent, isFinished } = require("./normalize");
 const config = require("../../../shared/config");
 
 let es = null;
 let reconnectTimer = null;
 let onScoreUpdate = null;
 let onMatchEvent = null;
+let onMatchFinished = null;
 let onError = null;
 
 function connect(callbacks = {}) {
   onScoreUpdate = callbacks.onScoreUpdate || (() => {});
   onMatchEvent = callbacks.onMatchEvent || (() => {});
+  onMatchFinished = callbacks.onMatchFinished || (() => {});
   onError = callbacks.onError || console.error;
-
   _connect();
 }
 
 function _connect() {
-  if (es) {
-    es.close();
-    es = null;
-  }
+  if (es) { es.close(); es = null; }
 
   const headers = makeHeaders();
   const url = `${config.txline.host}/api/scores/stream`;
@@ -36,36 +34,39 @@ function _connect() {
 
   es.onopen = () => {
     console.log("[stream] Connected");
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   };
 
   es.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
 
-      // Score update
-      if (data.HomeGoals !== undefined || data.Participant1Goals !== undefined) {
-        onScoreUpdate(normalizeScore(data));
-        return;
+      // Every event has Stats + Clock -- always emit score update
+      if (data.Stats && data.Clock) {
+        const score = normalizeScore(data);
+        onScoreUpdate(score);
       }
 
-      // Match event (goal, card, etc.)
-      if (data.EventType || data.Type) {
-        onMatchEvent(normalizeEvent(data));
-        return;
+      // Check for match finished
+      if (isFinished(data)) {
+        console.log("[stream] Match finished:", data.FixtureId);
+        onMatchFinished(data.FixtureId);
       }
+
+      // Emit meaningful match events
+      const event_ = normalizeEvent(data);
+      if (event_) {
+        onMatchEvent(event_);
+      }
+
     } catch (e) {
       // ignore parse errors
     }
   };
 
-  es.onerror = (err) => {
+  es.onerror = () => {
     console.error("[stream] SSE error — reconnecting in 5s");
-    es.close();
-    es = null;
+    if (es) { es.close(); es = null; }
     reconnectTimer = setTimeout(_connect, 5000);
   };
 }

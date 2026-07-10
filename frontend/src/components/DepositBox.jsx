@@ -32,7 +32,16 @@ export default function DepositBox({ fixtureId, fixture, onDeposit }) {
       onDeposit(side, amt);
       setDone(true);
     } catch (e) {
-      setError(e.message);
+      // Show friendly message for common errors
+      if (e.message.includes("KickoffPassed") || e.message.includes("0x1776")) {
+        setError("Kickoff has passed — this market is now locked. Watch the match!");
+      } else if (e.message.includes("BelowMinimumStake") || e.message.includes("0x1773")) {
+        setError("Minimum stake is $1 USDC.");
+      } else if (e.message.includes("MarketNotOpen") || e.message.includes("0x1770")) {
+        setError("This market is not open for deposits.");
+      } else {
+        setError(e.message);
+      }
     } finally {
       setLoading(false);
     }

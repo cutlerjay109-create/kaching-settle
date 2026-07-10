@@ -10,7 +10,9 @@ export default function LiveFeed({ score, events, fixture }) {
         </div>
         <div className="score-divider">
           <span className="period">{getPeriodLabel(score?.period)}</span>
-          <span className="minute">{score?.minute ? formatMinute(score.minute, score?.period) : ""}</span>
+          <span className="minute">
+            {score?.minute ? formatMinute(score.minute, score?.period) : ""}
+          </span>
         </div>
         <div className="team away">
           <span className="goals">{score?.awayGoals ?? 0}</span>
@@ -19,10 +21,12 @@ export default function LiveFeed({ score, events, fixture }) {
       </div>
 
       <div className="events-feed">
-        {events.map((e, i) => (
-          <div key={i} className={`event event-${e.type?.toLowerCase()}`}>
+        {events.filter(e => e && e.type).map((e, i) => (
+          <div key={i} className={"event event-" + (e.type || "").toLowerCase()}>
             <span className="event-minute">{e.minute}'</span>
-            <span className="event-type">{getEventIcon(e.type)} {e.type}</span>
+            <span className="event-type">
+              {getEventIcon(e.type)} {getEventLabel(e.type, e.team, fixture)}
+            </span>
             {e.player && <span className="event-player">{e.player}</span>}
           </div>
         ))}
@@ -45,23 +49,47 @@ function getPeriodLabel(period) {
 
 function formatMinute(minute, period) {
   if (!minute) return "";
-  // Handle stoppage time in first half
-  if (period === 1 && minute > 45) {
-    return `45+${minute - 45}'`;
-  }
-  // Handle stoppage time in second half
-  if (period === 2 && minute > 90) {
-    return `90+${minute - 90}'`;
-  }
-  return `${minute}'`;
+  if (period === 1 && minute > 45) return "45+" + (minute - 45) + "'";
+  if (period === 2 && minute > 90) return "90+" + (minute - 90) + "'";
+  return minute + "'";
 }
 
 function getEventIcon(type) {
-  if (!type) return "";
+  if (!type) return "•";
   const t = type.toLowerCase();
-  if (t.includes("goal")) return "⚽";
+  if (t.includes("goal") || t === "possible_goal") return "⚽";
   if (t.includes("yellow")) return "🟨";
   if (t.includes("red")) return "🟥";
+  if (t.includes("corner")) return "🚩";
+  if (t.includes("shot_ontarget")) return "🎯";
+  if (t.includes("shot_offtarget")) return "↗";
+  if (t.includes("shot_blocked")) return "🛡";
+  if (t.includes("penalty")) return "🎯";
   if (t.includes("sub")) return "🔄";
+  if (t.includes("free_kick")) return "🦶";
+  if (t.includes("throw_in")) return "↪";
+  if (t.includes("goal_kick")) return "🥅";
+  if (t.includes("offside")) return "🚫";
+  if (t.includes("var")) return "📺";
   return "•";
+}
+
+function getEventLabel(type, team, fixture) {
+  if (!type) return type;
+  const teamName = team === "home" ? fixture?.home : fixture?.away;
+  const t = type.toLowerCase();
+
+  if (t === "possible_goal") return "Possible Goal! — " + teamName;
+  if (t.includes("shot_ontarget")) return "Shot on Target — " + teamName;
+  if (t.includes("shot_offtarget")) return "Shot Off Target — " + teamName;
+  if (t.includes("shot_blocked")) return "Shot Blocked — " + teamName;
+  if (t === "corner") return "Corner — " + teamName;
+  if (t === "free_kick") return "Free Kick — " + teamName;
+  if (t === "throw_in") return "Throw In — " + teamName;
+  if (t === "goal_kick") return "Goal Kick — " + teamName;
+  if (t === "offside") return "Offside — " + teamName;
+  if (t === "penalty") return "Penalty! — " + teamName;
+  if (t === "yellow_card") return "Yellow Card — " + teamName;
+  if (t === "red_card") return "Red Card — " + teamName;
+  return type + " — " + teamName;
 }

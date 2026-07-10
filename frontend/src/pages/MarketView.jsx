@@ -82,14 +82,21 @@ export default function MarketView({ fixtureId, onBack }) {
       ) : (
         <>
           <PotMeter yesPot={yesPot} noPot={noPot} />
-          {connected ? (
+          {Date.now() > fixture?.kickoffMs ? (
+            <div className="match-locked">
+              <p>⚽ Match in progress — deposits closed</p>
+              <p className="locked-sub">
+                Total locked: ${(yesPot + noPot).toFixed(2)} USDC
+                — settlement happens automatically when the match ends.
+              </p>
+            </div>
+          ) : connected ? (
             <DepositBox
               fixtureId={fixtureId}
               fixture={fixture}
               onDeposit={(side, amount) => {
                 if (side === "YES") setYesPot(p => p + amount);
                 else setNoPot(p => p + amount);
-                // Refresh from chain after deposit
                 setTimeout(() => {
                   getMarket(fixtureId).then(m => {
                     if (m) { setYesPot(m.yesTotal); setNoPot(m.noTotal); }
