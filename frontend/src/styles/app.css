@@ -160,3 +160,31 @@ code { background: #1e1e2e; padding: 2px 4px; border-radius: 4px; font-size: 11p
 .match-locked p { color: #888; font-size: 15px; }
 .match-locked p:first-child { color: #4ade80; font-weight: 700; font-size: 16px; margin-bottom: 8px; }
 .locked-sub { font-size: 13px; color: #666; }
+
+/* Nav tabs */
+.nav-tabs { display: flex; gap: 8px; margin-top: 12px; }
+.nav-tab {
+  padding: 6px 16px; border-radius: 20px; border: 1px solid #1e1e2e;
+  background: none; color: #888; font-size: 13px; cursor: pointer;
+}
+.nav-tab.active { background: #4ade80; color: #0a0a0f; border-color: #4ade80; font-weight: 700; }
+
+/* My Positions */
+.my-positions h2 { margin-bottom: 16px; font-size: 18px; }
+.position-card {
+  background: #12121e; border: 1px solid #1e1e2e;
+  border-radius: 12px; padding: 16px; margin-bottom: 12px;
+}
+.position-card.can-claim { border-color: #4ade80; }
+.position-match { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+.position-question { font-size: 13px; color: #888; margin-bottom: 10px; }
+.position-details { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
+.position-side { font-weight: 800; font-size: 14px; padding: 2px 8px; border-radius: 4px; }
+.position-side.yes { color: #4ade80; background: #0d2015; }
+.position-side.no { color: #f87171; background: #200d0d; }
+.position-amount { font-size: 14px; font-weight: 600; }
+.position-status { font-size: 12px; color: #666; margin-left: auto; }
+.position-result { margin-bottom: 10px; font-size: 13px; }
+.result-win { color: #4ade80; font-weight: 700; }
+.result-loss { color: #f87171; }
+.result-claimed { color: #888; }

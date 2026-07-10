@@ -29,11 +29,41 @@ export default function MarketView({ fixtureId, onBack }) {
         setFixture(f || null);
       });
 
-    // Load on-chain pot sizes
+    // Load on-chain market state — works even after page refresh
     getMarket(fixtureId).then(market => {
-      if (market) {
-        setYesPot(market.yesTotal);
-        setNoPot(market.noTotal);
+      if (!market) return;
+      setYesPot(market.yesTotal);
+      setNoPot(market.noTotal);
+
+      // If already settled — show settlement screen immediately
+      if (market.status === 2) {
+        setSettlement({
+          fixtureId,
+          question: market.question,
+          winningSide: market.winningSide === 0 ? "YES" : "NO",
+          result: market.winningSide === 0,
+          proof: { dailyScoresRoot: "verify on Solana Explorer" },
+          commentary: market.winningSide === 0
+            ? "YES wins — the proof confirmed the result on Solana."
+            : "NO wins — the proof confirmed the result on Solana.",
+          audioUrl: null,
+          settledAt: Date.now(),
+        });
+      }
+
+      // If voided
+      if (market.status === 3) {
+        setSettlement({
+          fixtureId,
+          question: market.question,
+          winningSide: "VOID",
+          result: null,
+          proof: null,
+          commentary: "Market voided — one side had no deposits. Refunds available.",
+          audioUrl: null,
+          settledAt: Date.now(),
+          voided: true,
+        });
       }
     }).catch(() => {});
 
