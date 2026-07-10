@@ -27,3 +27,6 @@ keypair.json
 wallet-keypair.json
 keypair.json
 *.json.secret
+backend/src/kaching-beat-the-market
+package-lock.json
+/package.json
