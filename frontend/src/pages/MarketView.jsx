@@ -29,6 +29,22 @@ export default function MarketView({ fixtureId, onBack }) {
         setFixture(f || null);
       });
 
+    // Fetch last known score from TxLINE on page load
+    fetch(`${BACKEND}/api/scores/snapshot/${fixtureId}`)
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          const latest = data[data.length - 1];
+          setScore({
+            fixtureId,
+            homeGoals: latest.Participant1Goals ?? latest.HomeGoals ?? 0,
+            awayGoals: latest.Participant2Goals ?? latest.AwayGoals ?? 0,
+            period: latest.StatusId === 5 ? 5 : latest.StatusId === 4 ? 2 : latest.StatusId === 3 ? 3 : latest.StatusId === 2 ? 1 : 0,
+            minute: Math.floor((latest.Clock?.Seconds || 0) / 60),
+          });
+        }
+      }).catch(() => {});
+
     // Load on-chain market state — works even after page refresh
     getMarket(fixtureId).then(market => {
       if (!market) return;

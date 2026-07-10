@@ -12,9 +12,8 @@ export default function Receipt({ settlement }) {
   const [claimTx, setClaimTx] = useState(null);
   const [error, setError] = useState(null);
 
-  const explorerUrl = settlement.proof?.dailyScoresRoot
-    ? `https://explorer.solana.com/address/${settlement.proof.dailyScoresRoot}?cluster=devnet`
-    : `https://explorer.solana.com/address/${settlement.fixtureId}?cluster=devnet`;
+  const PROGRAM_ID = "9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B";
+  const explorerUrl = `https://solscan.io/account/${PROGRAM_ID}?cluster=devnet`;
 
   async function handleClaim() {
     if (!publicKey) return setError("Connect your wallet first");
@@ -39,6 +38,10 @@ export default function Receipt({ settlement }) {
         setError("You bet on the losing side — no claim available.");
       } else if (e.message.includes("AlreadyClaimed") || e.message.includes("0x1778")) {
         setError("Already claimed.");
+      } else if (e.message.includes("NothingToClaim") || e.message.includes("0x177a")) {
+        setError("No funds to claim — this market had no deposits.");
+      } else if (e.message.includes("Simulation failed")) {
+        setError("Claim failed — you may not have a position on the winning side.");
       } else {
         setError(e.message.slice(0, 100));
       }

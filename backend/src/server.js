@@ -35,6 +35,21 @@ app.get("/api/fixtures", async (req, res) => {
   }
 });
 
+app.get("/api/scores/snapshot/:fixtureId", async (req, res) => {
+  try {
+    const axios = require("axios");
+    const { makeHeaders } = require("./txline/auth");
+    const config = require("../../shared/config");
+    const r = await axios.get(
+      config.txline.host + "/api/scores/snapshot/" + req.params.fixtureId,
+      { headers: makeHeaders(), timeout: 10000 }
+    );
+    res.json(r.data);
+  } catch(e) {
+    res.json([]);
+  }
+});
+
 app.get("/api/fixtures/upcoming", async (req, res) => {
   try {
     const fixtures = await getUpcoming();
@@ -90,12 +105,29 @@ async function start() {
         threshold: 0,
         comparison: "greaterThan",
         status: "active",
+        kickoffMs: fixture.kickoffMs,
       });
     });
 
     // Auto-create and seed markets for all fixtures
     await autoCreateMarkets();
     await autoSeedMarkets();
+
+    // Register ALL fixtures with keeper so past-kickoff detection works
+    const allFixtures = await fetchFixtures();
+    for (const fixture of allFixtures) {
+      keeper.registerMarket({
+        fixtureId: fixture.fixtureId,
+        marketId: fixture.fixtureId,
+        question: `Will ${fixture.home} score a goal against ${fixture.away}?`,
+        statKey: 1,
+        threshold: 0,
+        comparison: "greaterThan",
+        status: "active",
+        kickoffMs: fixture.kickoffMs,
+      });
+    }
+    console.log("[server] Registered", allFixtures.length, "fixtures with keeper");
     // Re-check every hour
     setInterval(async () => { await autoCreateMarkets(); await autoSeedMarkets(); }, 60 * 60 * 1000);
 

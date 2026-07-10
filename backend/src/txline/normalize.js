@@ -3,20 +3,21 @@
 // Based on real live match data analysis.
 
 function getGamePhase(data) {
-  // StatusId: 2 = live, 3 = halftime, 5 = finished
-  // GameState: "scheduled" even during live play -- ignore it
+  // Real StatusId values confirmed from live stream:
+  // 1 = Pre-Match
+  // 2 = 1st Half
+  // 3 = Half Time
+  // 4 = 2nd Half
+  // 5 = Full Time
+  // GameState is always "scheduled" — ignore it
   const statusId = data.StatusId;
-  const seconds = data.Clock?.Seconds || 0;
 
   if (statusId === 5) return 5; // FT
+  if (statusId === 4) return 2; // 2nd Half
   if (statusId === 3) return 3; // HT
-  if (statusId === 2) {
-    // Determine half from clock seconds
-    // First half: 0-2700s (45 min), Second half: 2700s+
-    if (seconds <= 2700) return 1; // 1st Half
-    return 2; // 2nd Half
-  }
-  return 0; // Pre-Match
+  if (statusId === 2) return 1; // 1st Half
+  if (statusId === 1) return 0; // Pre-Match
+  return 0;
 }
 
 function getMinute(data) {

@@ -39,8 +39,8 @@ function getMarketPda(fixtureId) {
 
 async function main() {
   // France vs Morocco — France scored, YES wins
-  const FIXTURE_ID = 18209181;
-  const WINNING_SIDE = 0; // 0 = YES (France scored)
+  const FIXTURE_ID = 18218149;
+  const WINNING_SIDE = 0; // 0 = YES (Spain scored)
 
   const wallet = loadWallet();
   const connection = new Connection(config.rpc, "confirmed");
@@ -86,7 +86,7 @@ async function main() {
 
   // Step 2: Settle
   if (status <= 1) {
-    console.log("Settling — YES wins (France scored)...");
+    console.log("Settling — YES wins (Spain scored)...");
     const settleData = Buffer.concat([
       DISC.settle,
       Buffer.from([WINNING_SIDE]),
@@ -109,7 +109,7 @@ async function main() {
     await connection.confirmTransaction(settleSig, "confirmed");
     console.log("Settled! TX:", settleSig.slice(0,20) + "...");
     console.log("Explorer: https://solscan.io/tx/" + settleSig + "?cluster=devnet");
-    console.log("YES backers can now claim!");
+    console.log("YES backers can now claim! Spain 2-1 Belgium");
   } else {
     console.log("Market already settled, status:", status);
   }

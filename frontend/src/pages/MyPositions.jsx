@@ -175,8 +175,9 @@ function ClaimButton({ position, onClaimed }) {
 
 function getMarketAddress(fixtureId) {
   try {
-    return getMarketPda(fixtureId).toBase58();
-  } catch {
-    return fixtureId;
+    const pda = getMarketPda(fixtureId);
+    return pda.toBase58();
+  } catch(e) {
+    return "9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B";
   }
 }

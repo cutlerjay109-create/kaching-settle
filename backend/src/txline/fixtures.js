@@ -50,8 +50,20 @@ async function getCompleted() {
   return fixtures.filter(f =>
     f.status === "F" ||
     f.status === "FT" ||
-    f.status === "finished"
+    f.status === "finished" ||
+    f.status === "complete" ||
+    f.status === "completed"
   );
 }
 
-module.exports = { fetchFixtures, getFixture, getUpcoming, getCompleted };
+// Get fixtures that have passed their kickoff time
+// Used by keeper to detect matches that may be complete
+// even if TxLINE has removed them from the snapshot
+async function getPastKickoff() {
+  const fixtures = await fetchFixtures();
+  const now = Date.now();
+  // A match is likely complete 2.5 hours after kickoff
+  return fixtures.filter(f => f.kickoffMs < now - (2.5 * 60 * 60 * 1000));
+}
+
+module.exports = { fetchFixtures, getFixture, getUpcoming, getCompleted, getPastKickoff };
