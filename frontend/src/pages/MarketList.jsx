@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 
-const BACKEND = "http://localhost:3001";
+const BACKEND = "https://kaching-settle-production.up.railway.app";
 
 export default function MarketList({ onSelect }) {
   const [fixtures, setFixtures] = useState([]);

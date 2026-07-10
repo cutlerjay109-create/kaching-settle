@@ -9,7 +9,7 @@ import Receipt from "../components/Receipt";
 import { connectSocket } from "../lib/socket";
 import { getMarket } from "../lib/solana";
 
-const BACKEND = "http://localhost:3001";
+const BACKEND = "https://kaching-settle-production.up.railway.app";
 
 export default function MarketView({ fixtureId, onBack }) {
   const { connected } = useWallet();
