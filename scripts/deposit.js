@@ -41,9 +41,9 @@ function u64le(n) {
 
 async function main() {
   // CONFIG — change these
-  const FIXTURE_ID = 18143850;  // Vietnam vs Myanmar
+  const FIXTURE_ID = 18218149;  // Vietnam vs Myanmar
   const SIDE = 0;               // 0 = YES, 1 = NO
-  const AMOUNT_USDC = 2;        // $2
+  const AMOUNT_USDC = 3;        // $2
 
   console.log("=== DEPOSIT SCRIPT ===");
   console.log("Fixture:", FIXTURE_ID);

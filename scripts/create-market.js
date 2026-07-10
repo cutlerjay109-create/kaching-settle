@@ -35,9 +35,9 @@ async function main() {
   const program = new anchor.Program(idl, provider);
 
   // France vs Morocco — July 9 2026
-  const FIXTURE_ID = 18143850;
-  const QUESTION = "Will Vietnam score a goal against Myanmar?";
-  const KICKOFF_TS = Math.floor(new Date("2026-07-18T15:00:00Z").getTime() / 1000);
+  const FIXTURE_ID = 18218149;
+  const QUESTION = "Will Spain score a goal against Belgium?";
+  const KICKOFF_TS = Math.floor(new Date("2026-07-10T20:00:00Z").getTime() / 1000);
   const STAT_KEY = 1;
   const THRESHOLD = 0;
   const COMPARISON = 0;

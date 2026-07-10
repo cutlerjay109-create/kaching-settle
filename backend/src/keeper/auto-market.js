@@ -163,4 +163,124 @@ async function autoCreateMarkets() {
   console.log("[auto-market] Done checking fixtures");
 }
 
-module.exports = { autoCreateMarkets, setMarketCreatedCallback };
+const DISC_DEPOSIT = Buffer.from([242, 35, 198, 137, 82, 225, 242, 182]);
+
+function u64le(n) {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(BigInt(Math.floor(n)));
+  return buf;
+}
+
+function getVaultPda(fixtureId, side) {
+  const seed = side === 0 ? constants.SEEDS.YES_VAULT : constants.SEEDS.NO_VAULT;
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(seed), fixtureIdBytes(fixtureId)],
+    PROGRAM_ID
+  )[0];
+}
+
+function getPositionPda(fixtureId, user) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(constants.SEEDS.POSITION), fixtureIdBytes(fixtureId), user.toBuffer()],
+    PROGRAM_ID
+  )[0];
+}
+
+async function seedMarketIfEmpty(connection, wallet, fixtureId) {
+  const {
+    Transaction, TransactionInstruction, SystemProgram
+  } = require("@solana/web3.js");
+  const {
+    getAssociatedTokenAddressSync,
+    TOKEN_PROGRAM_ID,
+  } = require("@solana/spl-token");
+
+  const marketPda = getMarketPda(fixtureId);
+  const info = await connection.getAccountInfo(marketPda);
+  if (!info) return;
+
+  // Read yes/no totals
+  const d = info.data;
+  let o = 8 + 8;
+  const qLen = d.readUInt32LE(o); o += 4 + qLen;
+  o += 8 + 4 + 8 + 1;
+  const yesTotal = Number(d.readBigUInt64LE(o)) / 1e6; o += 8;
+  const noTotal = Number(d.readBigUInt64LE(o)) / 1e6;
+  const status = d.readUInt8(o + 8);
+
+  // Only seed OPEN markets
+  if (status !== 0) return;
+
+  const userToken = getAssociatedTokenAddressSync(
+    USDC_MINT, wallet.publicKey, false, TOKEN_PROGRAM_ID
+  );
+
+  async function doDeposit(side, amount) {
+    const vault = getVaultPda(fixtureId, side);
+    const position = getPositionPda(fixtureId, wallet.publicKey);
+    const data = Buffer.concat([
+      DISC_DEPOSIT,
+      Buffer.from([side]),
+      u64le(amount * 1_000_000),
+    ]);
+    const ix = new TransactionInstruction({
+      programId: PROGRAM_ID,
+      keys: [
+        { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
+        { pubkey: marketPda, isSigner: false, isWritable: true },
+        { pubkey: position, isSigner: false, isWritable: true },
+        { pubkey: vault, isSigner: false, isWritable: true },
+        { pubkey: userToken, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data,
+    });
+    const tx = new Transaction().add(ix);
+    tx.feePayer = wallet.publicKey;
+    tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    tx.sign(wallet);
+    const sig = await connection.sendRawTransaction(tx.serialize());
+    await connection.confirmTransaction(sig, "confirmed");
+    return sig;
+  }
+
+  if (yesTotal < 1) {
+    try {
+      const sig = await doDeposit(0, 2);
+      console.log("[auto-market] Seeded $2 YES for fixture", fixtureId, sig.slice(0,20) + "...");
+    } catch(e) {
+      console.log("[auto-market] YES seed failed:", e.message.slice(0,60));
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  if (noTotal < 1) {
+    try {
+      const sig = await doDeposit(1, 1);
+      console.log("[auto-market] Seeded $1 NO for fixture", fixtureId, sig.slice(0,20) + "...");
+    } catch(e) {
+      console.log("[auto-market] NO seed failed:", e.message.slice(0,60));
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+}
+
+async function autoSeedMarkets() {
+  if (!config.settleProgramId) return;
+  const wallet = loadWallet();
+  const connection = new Connection(config.rpc, "confirmed");
+  const fixtures = await fetchFixtures();
+  const now = Date.now();
+
+  for (const fixture of fixtures) {
+    if (fixture.kickoffMs <= now) continue;
+    try {
+      await seedMarketIfEmpty(connection, wallet, fixture.fixtureId);
+    } catch(e) {
+      console.error("[auto-market] Seed error:", e.message);
+    }
+  }
+}
+
+module.exports = { autoCreateMarkets, autoSeedMarkets, setMarketCreatedCallback };

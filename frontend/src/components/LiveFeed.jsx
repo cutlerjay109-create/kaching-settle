@@ -79,7 +79,7 @@ function getEventLabel(type, team, fixture) {
   const teamName = team === "home" ? fixture?.home : fixture?.away;
   const t = type.toLowerCase();
 
-  if (t === "possible_goal") return "Possible Goal! — " + teamName;
+  if (t === "possible_goal" || t === "possible") return "🚨 Possible Goal! — " + teamName;
   if (t.includes("shot_ontarget")) return "Shot on Target — " + teamName;
   if (t.includes("shot_offtarget")) return "Shot Off Target — " + teamName;
   if (t.includes("shot_blocked")) return "Shot Blocked — " + teamName;
