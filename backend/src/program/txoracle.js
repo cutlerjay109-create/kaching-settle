@@ -7,7 +7,7 @@ const anchor = require("@coral-xyz/anchor");
 const { Connection, PublicKey } = require("@solana/web3.js");
 const fs = require("fs");
 const path = require("path");
-const config = require("../../../shared/config");
+const config = require("../../shared/config");
 
 let _program = null;
 

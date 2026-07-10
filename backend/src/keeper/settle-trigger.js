@@ -27,8 +27,8 @@ function fixtureIdBytes(id) {
 }
 
 async function voidMarketOnChain(fixtureId) {
-  const config = require("../../../shared/config");
-  const constants = require("../../../shared/constants");
+  const config = require("../../shared/config");
+  const constants = require("../../shared/constants");
   const wallet = loadKeeperWallet();
   const connection = new Connection(config.rpc, "confirmed");
   const programId = new PublicKey(config.settleProgramId);
@@ -139,8 +139,8 @@ async function checkAndSettle() {
     try {
       // Check on-chain market state first
       const { Connection, PublicKey } = require("@solana/web3.js");
-      const config = require("../../../shared/config");
-      const constants = require("../../../shared/constants");
+      const config = require("../../shared/config");
+      const constants = require("../../shared/constants");
       const { getProgram, getMarketPda } = require("../program/client");
 
       const connection = new Connection(config.rpc, "confirmed");

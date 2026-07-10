@@ -5,7 +5,7 @@
 const EventSource = require("eventsource");
 const { makeHeaders } = require("./auth");
 const { normalizeScore, normalizeEvent, isFinished } = require("./normalize");
-const config = require("../../../shared/config");
+const config = require("../../shared/config");
 
 let es = null;
 let reconnectTimer = null;

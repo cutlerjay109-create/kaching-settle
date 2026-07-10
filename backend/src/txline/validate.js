@@ -7,8 +7,8 @@ const axios = require("axios");
 const anchor = require("@coral-xyz/anchor");
 const { Connection, PublicKey, ComputeBudgetProgram, Transaction } = require("@solana/web3.js");
 const { makeHeaders } = require("./auth");
-const config = require("../../../shared/config");
-const constants = require("../../../shared/constants");
+const config = require("../../shared/config");
+const constants = require("../../shared/constants");
 const fs = require("fs");
 const path = require("path");
 

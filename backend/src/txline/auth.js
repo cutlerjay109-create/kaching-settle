@@ -4,7 +4,7 @@
 // Uses saved TXLINE_API_TOKEN from .env (set by subscribe.js)
 
 const axios = require("axios");
-const config = require("../../../shared/config");
+const config = require("../../shared/config");
 
 let cachedAuth = null;
 

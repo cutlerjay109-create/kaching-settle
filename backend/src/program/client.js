@@ -16,8 +16,8 @@ const {
 const bs58 = require("bs58");
 const fs = require("fs");
 const path = require("path");
-const config = require("../../../shared/config");
-const constants = require("../../../shared/constants");
+const config = require("../../shared/config");
+const constants = require("../../shared/constants");
 
 let _program = null;
 let _wallet = null;

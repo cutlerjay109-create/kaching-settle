@@ -5,7 +5,7 @@
 const axios = require("axios");
 const { makeHeaders } = require("./auth");
 const { normalizeFixture } = require("./normalize");
-const config = require("../../../shared/config");
+const config = require("../../shared/config");
 
 let fixtureCache = [];
 let lastFetch = 0;

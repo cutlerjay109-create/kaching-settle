@@ -15,8 +15,8 @@ const bs58 = require("bs58");
 const fs = require("fs");
 const path = require("path");
 const anchor = require("@coral-xyz/anchor");
-const config = require("../../../shared/config");
-const constants = require("../../../shared/constants");
+const config = require("../../shared/config");
+const constants = require("../../shared/constants");
 const { fetchFixtures } = require("../txline/fixtures");
 
 const PROGRAM_ID = new PublicKey(config.settleProgramId);
