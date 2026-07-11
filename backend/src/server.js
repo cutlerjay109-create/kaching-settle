@@ -16,6 +16,7 @@ const CORS_ORIGINS = [
 
 const auth = require("./txline/auth");
 const stream = require("./txline/stream");
+const { getLastScore } = require("./txline/stream");
 const { fetchFixtures, getUpcoming } = require("./txline/fixtures");
 const keeper = require("./keeper/settle-trigger");
 const { autoCreateMarkets, autoSeedMarkets, setMarketCreatedCallback } = require("./keeper/auto-market");
@@ -42,14 +43,40 @@ app.get("/api/fixtures", async (req, res) => {
 
 app.get("/api/scores/snapshot/:fixtureId", async (req, res) => {
   try {
+    const fixtureId = parseInt(req.params.fixtureId);
+
+    // First try TxLINE live snapshot
     const axios = require("axios");
     const { makeHeaders } = require("./txline/auth");
     const config = require("../../shared/config");
-    const r = await axios.get(
-      config.txline.host + "/api/scores/snapshot/" + req.params.fixtureId,
-      { headers: makeHeaders(), timeout: 10000 }
-    );
-    res.json(r.data);
+
+    try {
+      const r = await axios.get(
+        config.txline.host + "/api/scores/snapshot/" + fixtureId,
+        { headers: makeHeaders(), timeout: 5000 }
+      );
+      if (r.data && r.data.length > 0) {
+        return res.json(r.data);
+      }
+    } catch(e) {
+      // TxLINE snapshot failed or empty — fall through to score store
+    }
+
+    // Fall back to our own score store
+    const stored = getLastScore(fixtureId);
+    if (stored) {
+      console.log("[server] Serving stored score for fixture", fixtureId);
+      return res.json([{
+        FixtureId: fixtureId,
+        Participant1Goals: stored.homeGoals,
+        Participant2Goals: stored.awayGoals,
+        StatusId: stored.period === 5 ? 5 : stored.period === 3 ? 3 : stored.period === 2 ? 4 : 2,
+        Clock: { Seconds: stored.minute * 60 },
+        Stats: { "1": stored.homeGoals, "2": stored.awayGoals }
+      }]);
+    }
+
+    res.json([]);
   } catch(e) {
     res.json([]);
   }

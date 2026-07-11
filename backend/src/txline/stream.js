@@ -14,6 +14,14 @@ let onMatchEvent = null;
 let onMatchFinished = null;
 let onError = null;
 
+// Score store — saves last known score for every fixture
+// TxLINE removes score data after match ends, so we keep our own copy
+const scoreStore = {};
+
+function getLastScore(fixtureId) {
+  return scoreStore[fixtureId] || null;
+}
+
 function connect(callbacks = {}) {
   onScoreUpdate = callbacks.onScoreUpdate || (() => {});
   onMatchEvent = callbacks.onMatchEvent || (() => {});
@@ -44,6 +52,8 @@ function _connect() {
       // Every event has Stats + Clock -- always emit score update
       if (data.Stats && data.Clock) {
         const score = normalizeScore(data);
+        // Save to score store so we can serve it after TxLINE clears it
+        scoreStore[data.FixtureId] = score;
         onScoreUpdate(score);
       }
 
@@ -77,4 +87,4 @@ function disconnect() {
   console.log("[stream] Disconnected");
 }
 
-module.exports = { connect, disconnect };
+module.exports = { connect, disconnect, getLastScore };
