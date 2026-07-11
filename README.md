@@ -395,7 +395,7 @@ TXLINE_API_TOKEN=    # produced by: node scripts/subscribe.js  (free tier)
 | `scripts/manual-settle.js` | Manual settlement for completed fixtures |
 | `scripts/decode-market.js` | Decode raw on-chain market account data |
 | `scripts/extend-program.js` | Extend program account size before redeployment |
-| `scripts/seed-all-markets.js` | Seed all upcoming markets with initial deposits |
+| `scripts/seed-all-markets.js` | Manually seed both sides of upcoming markets (requires two wallets) |
 
 ---
 
