@@ -104,8 +104,8 @@ async function createMarketForFixture(connection, wallet, fixture) {
     keys: [
       { pubkey: wallet.publicKey, isSigner: true, isWritable: true },
       { pubkey: marketPda, isSigner: false, isWritable: true },
-      { pubkey: noVault, isSigner: false, isWritable: true },
       { pubkey: yesVault, isSigner: false, isWritable: true },
+      { pubkey: noVault, isSigner: false, isWritable: true },
       { pubkey: USDC_MINT, isSigner: false, isWritable: false },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },

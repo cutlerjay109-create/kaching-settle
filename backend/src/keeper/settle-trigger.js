@@ -175,6 +175,9 @@ async function checkAndSettle() {
           } catch(e) {
             console.error("[keeper] Void failed:", e.message);
           }
+          // Mark as settled regardless to stop retrying
+          market.status = "settled";
+          activeMarkets.set(fixture.fixtureId, market);
           if (settleCallback) {
             settleCallback({
               fixtureId: fixture.fixtureId,
