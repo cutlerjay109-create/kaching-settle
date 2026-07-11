@@ -114,9 +114,10 @@ async function start() {
       });
     });
 
-    // Auto-create and seed markets for all fixtures
+    // Auto-create markets for all fixtures
     await autoCreateMarkets();
-    await autoSeedMarkets();
+    // Auto-seeding disabled — SideMismatch prevents keeper from holding both sides
+    // await autoSeedMarkets();
 
     // Register ALL fixtures with keeper so past-kickoff detection works
     const allFixtures = await fetchFixtures();
@@ -134,7 +135,7 @@ async function start() {
     }
     console.log("[server] Registered", allFixtures.length, "fixtures with keeper");
     // Re-check every hour
-    setInterval(async () => { await autoCreateMarkets(); await autoSeedMarkets(); }, 60 * 60 * 1000);
+    setInterval(async () => { await autoCreateMarkets(); }, 60 * 60 * 1000);
 
     // Start keeper — checks for completed fixtures every 60s
     keeper.onSettle((settlement) => {
