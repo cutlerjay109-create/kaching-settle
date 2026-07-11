@@ -175,13 +175,7 @@ function u64le(n) {
   return buf;
 }
 
-function getVaultPda(fixtureId, side) {
-  const seed = side === 0 ? constants.SEEDS.YES_VAULT : constants.SEEDS.NO_VAULT;
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from(seed), fixtureIdBytes(fixtureId)],
-    PROGRAM_ID
-  )[0];
-}
+// getVaultPda defined above — using seed string directly
 
 function getPositionPda(fixtureId, user) {
   return PublicKey.findProgramAddressSync(
@@ -220,7 +214,8 @@ async function seedMarketIfEmpty(connection, wallet, fixtureId) {
   );
 
   async function doDeposit(side, amount) {
-    const vault = getVaultPda(fixtureId, side);
+    const vaultSeed = side === 0 ? constants.SEEDS.YES_VAULT : constants.SEEDS.NO_VAULT;
+    const vault = getVaultPda(fixtureId, vaultSeed);
     const position = getPositionPda(fixtureId, wallet.publicKey);
     const data = Buffer.concat([
       DISC_DEPOSIT,
