@@ -523,7 +523,7 @@
     {
       "code": 6012,
       "name": "CannotVoid",
-      "msg": "Cannot void \u2014 both sides have funds"
+      "msg": "Cannot void"
     },
     {
       "code": 6013,
@@ -534,6 +534,16 @@
       "code": 6014,
       "name": "AlreadyRefunded",
       "msg": "Already refunded"
+    },
+    {
+      "code": 6015,
+      "name": "SideMismatch",
+      "msg": "You already have a position on the other side"
+    },
+    {
+      "code": 6016,
+      "name": "MarketExpired",
+      "msg": "Market expired"
     }
   ]
 }
