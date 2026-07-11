@@ -47,7 +47,7 @@ function broadcastAll(event, data) {
 
 function broadcastPundit(fixtureId, data) {
   if (io) {
-    io.to(`fixture:${fixtureId}`).emit("pundit", data);
+    io.to(`market-${fixtureId}`).emit("pundit", data);
     console.log("[sockets] Pundit broadcast to fixture", fixtureId);
   }
 }

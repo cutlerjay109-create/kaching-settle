@@ -96,6 +96,17 @@ export default function MarketView({ fixtureId, onBack }) {
       }
     });
 
+    socket.on("pundit", (data) => {
+      if (data.text) {
+        setSettlement(prev => ({
+          ...prev,
+          liveCommentary: data.text,
+          audioUrl: data.audioUrl,
+          isLive: true,
+        }));
+        setTimeout(() => setSettlement(prev => prev && prev.isLive ? null : prev), 15000);
+      }
+    });
     socket.on("settlement", (s) => {
       if (s.fixtureId === fixtureId) {
         setSettlement(s);
