@@ -78,10 +78,6 @@ async function createMarketForFixture(connection, wallet, fixture) {
   const marketPda = getMarketPda(fixtureId);
   const yesVault = getVaultPda(fixtureId, constants.SEEDS.YES_VAULT);
   const noVault = getVaultPda(fixtureId, constants.SEEDS.NO_VAULT);
-  console.log("[auto-market] DEBUG fixture:", fixtureId);
-  console.log("[auto-market] DEBUG YES_VAULT seed:", constants.SEEDS.YES_VAULT);
-  console.log("[auto-market] DEBUG yesVault PDA:", yesVault.toBase58());
-  console.log("[auto-market] DEBUG noVault PDA:", noVault.toBase58());
 
   // Encode instruction data manually
   const fixtureIdBuf = u64le(fixtureId);
