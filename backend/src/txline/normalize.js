@@ -46,16 +46,31 @@ function normalizeFixture(f) {
   };
 }
 
+// Last known scores per fixture — prevents score reset at HT
+const lastKnownScores = {};
+
 function normalizeScore(data) {
-  // Stats object: key "1" = home goals, key "2" = away goals
-  const stats = data.Stats || {};
-  const homeGoals = stats["1"] ?? 0;
-  const awayGoals = stats["2"] ?? 0;
   const period = getGamePhase(data);
   const minute = getMinute(data);
+  const fixtureId = data.FixtureId;
+
+  // Only update goals if Stats field is present and has goal data
+  let homeGoals, awayGoals;
+
+  if (data.Stats && (data.Stats["1"] !== undefined || data.Stats["2"] !== undefined)) {
+    homeGoals = data.Stats["1"] ?? 0;
+    awayGoals = data.Stats["2"] ?? 0;
+    // Save last known score
+    lastKnownScores[fixtureId] = { homeGoals, awayGoals };
+  } else {
+    // Stats missing (e.g. HT event) — use last known score
+    const last = lastKnownScores[fixtureId] || { homeGoals: 0, awayGoals: 0 };
+    homeGoals = last.homeGoals;
+    awayGoals = last.awayGoals;
+  }
 
   return {
-    fixtureId: data.FixtureId,
+    fixtureId,
     homeGoals,
     awayGoals,
     period,
