@@ -115,12 +115,46 @@ async function start() {
     await fetchFixtures();
 
     // Start live score stream
+    const { generateCommentary } = require("./ai/pundit");
+    const { generateVoice } = require("./ai/voice");
+
     stream.connect({
       onScoreUpdate: (score) => {
         sockets.broadcastScore(score.fixtureId, score);
       },
       onMatchEvent: (event) => {
         sockets.broadcastEvent(event.fixtureId, event);
+      },
+      onMatchFinished: (fixtureId) => {
+        console.log("[stream] Match finished:", fixtureId);
+      },
+      onSignificantEvent: async (event) => {
+        try {
+          const allFixtures = await fetchFixtures();
+          const fixture = allFixtures.find(f => f.fixtureId === event.fixtureId);
+          if (!fixture) return;
+          const teamName = event.team === "home" ? fixture.home : fixture.away;
+          let prompt = "";
+          if (event.type === "goal") {
+            prompt = "GOAL for " + teamName + (event.minute ? " in the " + event.minute + "th minute" : "") + "! One sentence of excited football pundit commentary. Under 20 words.";
+          } else if (event.type === "possible_goal") {
+            prompt = "Possible goal for " + teamName + "! VAR is checking. One sentence of tense pundit commentary. Under 20 words.";
+          } else if (event.type === "penalty") {
+            prompt = "Penalty awarded to " + teamName + "! One sentence of dramatic pundit commentary. Under 20 words.";
+          } else if (event.type === "red_card") {
+            prompt = "Red card for " + teamName + "! One sentence of shocked pundit commentary. Under 20 words.";
+          } else if (event.type === "var") {
+            prompt = "VAR review for " + fixture.home + " vs " + fixture.away + ". One sentence of suspenseful commentary. Under 20 words.";
+          }
+          if (!prompt) return;
+          console.log("[pundit] Live event:", event.type, teamName);
+          const text = await generateCommentary({ prompt });
+          if (!text) return;
+          const audioUrl = await generateVoice(text);
+          sockets.broadcastPundit(event.fixtureId, { text, audioUrl, event });
+        } catch(e) {
+          console.error("[pundit] Live error:", e.message);
+        }
       },
     });
 
