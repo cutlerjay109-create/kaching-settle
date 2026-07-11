@@ -33,7 +33,9 @@ export default function DepositBox({ fixtureId, fixture, onDeposit }) {
       setDone(true);
     } catch (e) {
       // Show friendly message for common errors
-      if (e.message.includes("KickoffPassed") || e.message.includes("0x1776")) {
+      if (e.message.includes("SideMismatch") || e.message.includes("0x177f")) {
+        setError("You already have a position on the other side of this market.");
+      } else if (e.message.includes("KickoffPassed") || e.message.includes("0x1776")) {
         setError("Kickoff has passed — this market is now locked. Watch the match!");
       } else if (e.message.includes("BelowMinimumStake") || e.message.includes("0x1773")) {
         setError("Minimum stake is $1 USDC.");
