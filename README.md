@@ -124,12 +124,9 @@ One sentence: *we built the part everyone else fakes.*
 **Zero manual operations.** On startup the backend:
 1. Authenticates with TxLINE
 2. Fetches all fixtures — creates missing on-chain markets automatically
-3. Seeds both YES and NO vaults so the pot meter always shows real numbers
-4. Registers every fixture with the keeper bot
-5. Connects to TxLINE's live SSE stream
-6. Re-checks for new fixtures every hour
-
-New fixtures appearing in the TxLINE feed get markets within the hour — untouched by human hands.
+3. Registers every fixture with the keeper bot
+4. Connects to TxLINE's live SSE stream
+5. Re-checks for new fixtures every hour — any new fixture gets a market within 60 minutes
 
 ---
 
@@ -179,8 +176,6 @@ Winners: program.claim() → USDC released pro-rata from both vaults
 Solscan receipt — independently verifiable settlement trail
 ```
 
-The keeper can only *relay* a proof that already verifies against TxLINE's on-chain Merkle root. It cannot fabricate a result: any observer can re-run the same `validateStat()` call and confirm the settlement was honest.
-
 ---
 
 ## TxLINE Endpoints Used
@@ -199,9 +194,9 @@ The keeper can only *relay* a proof that already verifies against TxLINE's on-ch
 
 Every data call carries both required headers: `Authorization: Bearer <jwt>` and `X-Api-Token: <apiToken>`.
 
-**TxLINE SSE schema (confirmed from live match data):**
-- `StatusId` — `2` = 1st Half, `3` = HT, `4` = 2nd Half, `5` = FT (`GameState` is always `"scheduled"` — ignore it)
-- `Clock.Seconds` / 60 = match minute
+**TxLINE SSE schema confirmed from live match data:**
+- `StatusId` — `2` = 1st Half, `3` = HT, `4` = 2nd Half, `5` = FT (`GameState` is always `"scheduled"` even during live play — ignore it)
+- `Clock.Seconds / 60` = match minute
 - `Stats["1"]` = home goals, `Stats["2"]` = away goals
 - `Action` field = match events (`goal`, `shot`, `corner`, `possible`, etc.)
 - `statKey 1` = home goals for `validateStat`
@@ -224,12 +219,12 @@ Every data call carries both required headers: `Authorization: Bearer <jwt>` and
 | `create_market` | Opens a fixture's market: question, kickoff timestamp, stat predicate, YES vault, NO vault | One market per fixture (PDA-enforced) |
 | `deposit` | Locks user USDC into chosen side; records position | `MIN $1`, `MAX $10,000`, rejects after kickoff (`KickoffPassed`), same-side only (`SideMismatch`) |
 | `lock_market` | Seals the market at kickoff | Authority-gated, kickoff-time checked |
-| `settle` | Records the proof-verified winning side | Only from `LOCKED` state, authority-gated |
+| `settle` | Records the proof-verified winning side permanently | Only from `LOCKED` state, authority-gated |
 | `claim` | Pays winner: stake + pro-rata share of losing pot | `SETTLED` only, winning side only, single claim (`AlreadyClaimed`) |
 | `void_market` | Cancels market if one side empty OR 7 days past kickoff | `LOCKED` state only, authority-gated |
-| `refund` | Returns stake to user from voided market | `VOID` state only, once per user (`AlreadyRefunded`) |
+| `refund` | Returns exact stake to user from a voided market | `VOID` state only, once per user (`AlreadyRefunded`) |
 
-### Error codes
+### Error Codes
 
 | Code | Name | Meaning |
 |---|---|---|
@@ -238,20 +233,20 @@ Every data call carries both required headers: `Authorization: Bearer <jwt>` and
 | 6002 | `MarketNotSettled` | Claims require SETTLED state |
 | 6003 | `BelowMinimumStake` | Minimum deposit is $1 USDC |
 | 6004 | `AboveMaximumStake` | Maximum deposit is $10,000 USDC |
-| 6005 | `KickoffNotReached` | Can't lock before kickoff |
-| 6006 | `KickoffPassed` | Can't deposit after kickoff |
+| 6005 | `KickoffNotReached` | Cannot lock before kickoff time |
+| 6006 | `KickoffPassed` | Cannot deposit after kickoff |
 | 6007 | `InvalidSide` | Side must be 0 (YES) or 1 (NO) |
 | 6008 | `AlreadyClaimed` | Position already claimed |
-| 6009 | `WrongSide` | Lost side cannot claim |
+| 6009 | `WrongSide` | Losing side cannot claim |
 | 6010 | `NothingToClaim` | No funds in vault |
 | 6011 | `Unauthorized` | Only keeper wallet can settle |
 | 6012 | `CannotVoid` | Both sides funded and not expired |
 | 6013 | `MarketNotVoid` | Refund requires VOID state |
-| 6014 | `AlreadyRefunded` | Refund already claimed |
-| 6015 | `SideMismatch` | Wallet already has position on other side |
+| 6014 | `AlreadyRefunded` | Refund already processed |
+| 6015 | `SideMismatch` | Wallet already has position on the other side |
 | 6016 | `MarketExpired` | Market past 7-day expiry window |
 
-### Account model
+### Account Model
 
 - **`Market`** — question, kickoff, stat predicate, YES/NO totals, status (`OPEN → LOCKED → SETTLED/VOID`), winning side, bumps.
 - **`Position`** — per-user, per-market stake record: side, amount, claimed flag.
@@ -268,7 +263,11 @@ Every market's complete state lives as raw bytes on Solana. Anyone can read and 
 ### Decode a market yourself
 
 ```bash
-node scripts/decode-market.js <base64-account-data>
+# By fixture ID (fetches from chain)
+node scripts/decode-market.js 18213979
+
+# By raw base64 account data
+node scripts/decode-market.js <base64data>
 ```
 
 ### France vs Morocco — Settled market
@@ -311,7 +310,14 @@ Status:        OPEN — accepting deposits
 Winning Side:  Not yet settled
 ```
 
-The two bytes that change when settlement fires: `Status` flips from `0x00` (OPEN) to `0x02` (SETTLED), and `WinningSide` flips from `0xFF` (not set) to `0x00` (YES) or `0x01` (NO). Everything else — the question, the vault totals, the kickoff time — is preserved on-chain permanently.
+### What changes at settlement
+
+Two bytes flip on-chain when the keeper calls `settle()`:
+
+- `Status` → `0x00` (OPEN) or `0x01` (LOCKED) becomes `0x02` (SETTLED)
+- `WinningSide` → `0xFF` (not set) becomes `0x00` (YES) or `0x01` (NO)
+
+Everything else — the question, vault totals, kickoff time — is preserved on-chain permanently and is readable by anyone forever.
 
 ---
 
@@ -366,7 +372,7 @@ cd kaching-settle
 cd backend
 cp .env.example .env        # fill in your keys
 npm install
-node src/server.js          # auto-creates markets, seeds vaults, starts keeper + stream
+node src/server.js          # auto-creates markets, starts keeper + stream
 
 # 2 — Frontend (second terminal)
 cd frontend
@@ -377,25 +383,25 @@ npm run dev                 # open http://localhost:5173
 ### Environment variables (`backend/.env`)
 
 ```ini
-WALLET_KEYPAIR=      # base58 private key — keeper wallet (devnet SOL + USDC required)
+WALLET_KEYPAIR=      # base58 private key — keeper wallet (devnet SOL required)
 GROQ_API_KEY=        # console.groq.com
 ELEVENLABS_API_KEY=  # elevenlabs.io
 ELEVENLABS_VOICE_ID= # your chosen voice
-TXLINE_API_TOKEN=    # produced by: node scripts/subscribe.js  (free tier)
+TXLINE_API_TOKEN=    # produced by: node scripts/subscribe.js (free tier)
 ```
 
-### Useful scripts
+### Scripts
 
 | Script | Purpose |
 |---|---|
 | `scripts/subscribe.js` | One-time TxLINE on-chain subscription + token activation |
 | `scripts/spike.js` | Connectivity check: auth, fixtures, proofs |
-| `scripts/deposit.js` | Terminal deposit onto either side (demo seeding) |
+| `scripts/deposit.js` | Terminal deposit onto one side of a market |
 | `scripts/create-market.js` | Manual market creation (auto-market normally handles this) |
 | `scripts/manual-settle.js` | Manual settlement for completed fixtures |
-| `scripts/decode-market.js` | Decode raw on-chain market account data |
+| `scripts/decode-market.js` | Decode raw on-chain market account data by fixture ID or base64 |
 | `scripts/extend-program.js` | Extend program account size before redeployment |
-| `scripts/seed-all-markets.js` | Manually seed both sides of upcoming markets (requires two wallets) |
+| `scripts/seed-all-markets.js` | Seed markets manually — **requires two separate wallets** due to on-chain `SideMismatch` protection |
 
 ---
 
@@ -453,9 +459,9 @@ kaching-settle/
 |---|---|
 | Operator steals funds | Impossible — vaults are keyless PDAs; only program code moves funds |
 | Operator fakes a result | Keeper can only relay proofs that verify against TxLINE's on-chain Merkle root; anyone can re-verify |
-| Deposit after kickoff | Rejected by on-chain clock check, not server logic — `KickoffPassed` |
+| Deposit after kickoff | Rejected by on-chain clock check — `KickoffPassed` |
 | Betting both sides from one wallet | Rejected on-chain — `SideMismatch` (6015) |
-| Double claim | `Position.claimed` flag, enforced on-chain — `AlreadyClaimed` |
+| Double claim | `Position.claimed` flag enforced on-chain — `AlreadyClaimed` |
 | Wrong-side claim | `WrongSide` check against on-chain `winning_side` |
 | Dust / griefing | $1 minimum stake enforced in-program — `BelowMinimumStake` |
 | Funds permanently stuck | 7-day market expiry — `void_market` releases all funds after deadline |
@@ -478,11 +484,11 @@ Most hackathon prediction apps are a scoreboard with a database deciding payouts
 3. **Fully automatic market lifecycle** — every fixture in the feed gets an on-chain market, a kickoff gate, and a keeper watching it, with zero human operations.
 4. **Three-layer completion detection** — keeper catches matches regardless of whether TxLINE keeps them in the feed after they end.
 5. **Emergency expiry protection** — funds can never be permanently locked. Markets void automatically 7 days past kickoff if no proof arrives.
-6. **Side integrity enforcement** — one wallet, one side per market. The program rejects conflicting positions on-chain.
+6. **Side integrity enforcement** — one wallet, one side per market. The program rejects conflicting positions on-chain (`SideMismatch`).
 7. **A human face on the cryptography** — an AI pundit explains every settlement in plain language and voice, so a normal football fan understands *why* they got paid.
 8. **The underdog engine** — pool-ratio odds that reward the brave call automatically, displayed live.
 9. **Permanent betting history** — My Positions reads directly from Solana, showing every bet ever placed regardless of whether the fixture still appears in the TxLINE feed.
-10. **Raw on-chain verifiability** — every market's state is readable as raw bytes. Anyone can decode it with a script, no API required.
+10. **Raw on-chain verifiability** — every market's state is readable as raw bytes. Anyone can decode it with `scripts/decode-market.js`, no API required.
 
 *The proof pays you. That's the whole product.*
 
@@ -492,6 +498,8 @@ Most hackathon prediction apps are a scoreboard with a database deciding payouts
 
 **Built for the TxLINE World Cup Hackathon 2026**
 
-Backend: [kaching-settle-production.up.railway.app](https://kaching-settle-production.up.railway.app/health) · Twitter/X: [@levr_nx](https://x.com/levr_nx) · GitHub: [cutlerjay109-create](https://github.com/cutlerjay109-create)
+Live App: [kaching-settle-ten.vercel.app](https://kaching-settle-ten.vercel.app) · Backend: [kaching-settle-production.up.railway.app](https://kaching-settle-production.up.railway.app/health)
+
+Twitter/X: [@levr_nx](https://x.com/levr_nx) · GitHub: [cutlerjay109-create](https://github.com/cutlerjay109-create)
 
 </div>
