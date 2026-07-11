@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "dev": "npx vite",
+    "build": "npx vite build",
+    "preview": "npx vite preview"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.30.1",
@@ -18,7 +18,8 @@
     "buffer": "^6.0.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "socket.io-client": "^4.8.0"
+    "socket.io-client": "^4.8.0",
+    "vite": "^5.4.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
