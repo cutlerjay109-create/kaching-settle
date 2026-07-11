@@ -8,6 +8,11 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
+const CORS_ORIGINS = [
+  "http://localhost:5173",
+  "https://kaching-settle-ten.vercel.app",
+  /\.vercel\.app$/,
+];
 
 const auth = require("./txline/auth");
 const stream = require("./txline/stream");
@@ -20,7 +25,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-app.use(cors());
+app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
 app.use(express.json());
 
 // ── Routes ─────────────────────────────────────────────
