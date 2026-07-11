@@ -69,10 +69,10 @@ function normalizeEvent(data) {
   const minute = getMinute(data);
 
   // Only show meaningful events -- filter out possession noise
+  // throw_in and goal_kick removed — too frequent, adds noise
   const meaningfulActions = [
     "goal", "shot", "yellow_card", "red_card", "corner",
-    "penalty", "free_kick", "throw_in", "goal_kick",
-    "possible", "var", "offside", "substitution"
+    "penalty", "free_kick", "possible", "var", "offside", "substitution"
   ];
 
   const isMeaningful = meaningfulActions.some(a =>
@@ -98,11 +98,14 @@ function normalizeEvent(data) {
   // Skip unconfirmed events
   if (data.Confirmed === false) return null;
 
+  const period = getGamePhase(data);
+
   return {
     fixtureId: data.FixtureId,
     type,
     team: data.Participant === 1 ? "home" : "away",
     minute,
+    period,
     player: data.PlayerName || data.Data?.PlayerName || null,
     data: data.Data || {},
     ts: data.Ts ?? Date.now(),

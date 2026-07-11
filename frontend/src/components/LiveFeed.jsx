@@ -23,7 +23,7 @@ export default function LiveFeed({ score, events, fixture }) {
       <div className="events-feed">
         {events.filter(e => e && e.type).map((e, i) => (
           <div key={i} className={"event event-" + (e.type || "").toLowerCase()}>
-            <span className="event-minute">{e.minute}'</span>
+            <span className="event-minute">{formatMinute(e.minute, e.period)}</span>
             <span className="event-type">
               {getEventIcon(e.type)} {getEventLabel(e.type, e.team, fixture)}
             </span>
@@ -36,60 +36,64 @@ export default function LiveFeed({ score, events, fixture }) {
 }
 
 function getPeriodLabel(period) {
-  if (!period) return "Pre-Match";
-  if (period === 1) return "1st Half";
-  if (period === 2) return "2nd Half";
+  if (!period && period !== 0) return "Pre-Match";
+  if (period === 0) return "Pre-Match";
+  if (period === 1) return "1H";
+  if (period === 2) return "2H";
   if (period === 3) return "HT";
-  if (period === 4) return "Extra Time";
+  if (period === 4) return "ET";
   if (period === 5) return "FT";
   if (period === 6) return "AET";
-  if (period === 7) return "Penalties";
+  if (period === 7) return "Pen";
   return "Live";
 }
 
 function formatMinute(minute, period) {
   if (!minute) return "";
+  // First half stoppage time
   if (period === 1 && minute > 45) return "45+" + (minute - 45) + "'";
+  // Second half — always shows real minute (46, 47... 90)
+  // Only shows stoppage format after 90
   if (period === 2 && minute > 90) return "90+" + (minute - 90) + "'";
+  // Normal minute
   return minute + "'";
 }
 
 function getEventIcon(type) {
   if (!type) return "•";
   const t = type.toLowerCase();
-  if (t.includes("goal") || t === "possible_goal") return "⚽";
+  if (t === "goal") return "⚽";
+  if (t === "possible_goal") return "🚨";
   if (t.includes("yellow")) return "🟨";
   if (t.includes("red")) return "🟥";
-  if (t.includes("corner")) return "🚩";
-  if (t.includes("shot_ontarget")) return "🎯";
-  if (t.includes("shot_offtarget")) return "↗";
-  if (t.includes("shot_blocked")) return "🛡";
-  if (t.includes("penalty")) return "🎯";
-  if (t.includes("sub")) return "🔄";
-  if (t.includes("free_kick")) return "🦶";
-  if (t.includes("throw_in")) return "↪";
-  if (t.includes("goal_kick")) return "🥅";
-  if (t.includes("offside")) return "🚫";
-  if (t.includes("var")) return "📺";
+  if (t === "corner") return "🚩";
+  if (t === "shot_ontarget") return "🎯";
+  if (t === "shot_offtarget") return "↗";
+  if (t === "shot_blocked") return "🛡";
+  if (t === "penalty") return "⚡";
+  if (t === "substitution") return "🔄";
+  if (t === "free_kick") return "🦶";
+  if (t === "var") return "📺";
+  if (t === "offside") return "🚫";
   return "•";
 }
 
 function getEventLabel(type, team, fixture) {
-  if (!type) return type;
+  if (!type) return "";
   const teamName = team === "home" ? fixture?.home : fixture?.away;
   const t = type.toLowerCase();
-
-  if (t === "possible_goal" || t === "possible") return "🚨 Possible Goal! — " + teamName;
-  if (t.includes("shot_ontarget")) return "Shot on Target — " + teamName;
-  if (t.includes("shot_offtarget")) return "Shot Off Target — " + teamName;
-  if (t.includes("shot_blocked")) return "Shot Blocked — " + teamName;
+  if (t === "goal") return "GOAL! — " + teamName;
+  if (t === "possible_goal") return "Possible Goal — " + teamName;
+  if (t === "shot_ontarget") return "Shot on Target — " + teamName;
+  if (t === "shot_offtarget") return "Shot Off Target — " + teamName;
+  if (t === "shot_blocked") return "Shot Blocked — " + teamName;
   if (t === "corner") return "Corner — " + teamName;
   if (t === "free_kick") return "Free Kick — " + teamName;
-  if (t === "throw_in") return "Throw In — " + teamName;
-  if (t === "goal_kick") return "Goal Kick — " + teamName;
-  if (t === "offside") return "Offside — " + teamName;
-  if (t === "penalty") return "Penalty! — " + teamName;
   if (t === "yellow_card") return "Yellow Card — " + teamName;
   if (t === "red_card") return "Red Card — " + teamName;
+  if (t === "penalty") return "Penalty! — " + teamName;
+  if (t === "substitution") return "Substitution — " + teamName;
+  if (t === "var") return "VAR Review — " + teamName;
+  if (t === "offside") return "Offside — " + teamName;
   return type + " — " + teamName;
 }

@@ -13,6 +13,12 @@ let onScoreUpdate = null;
 let onMatchEvent = null;
 let onMatchFinished = null;
 let onError = null;
+let onSignificantEvent = null;
+
+// Events that trigger AI commentary
+const PUNDIT_TRIGGERS = new Set([
+  "goal", "possible_goal", "penalty", "red_card", "var"
+]);
 
 // Score store — saves last known score for every fixture
 // TxLINE removes score data after match ends, so we keep our own copy
@@ -26,6 +32,7 @@ function connect(callbacks = {}) {
   onScoreUpdate = callbacks.onScoreUpdate || (() => {});
   onMatchEvent = callbacks.onMatchEvent || (() => {});
   onMatchFinished = callbacks.onMatchFinished || (() => {});
+  onSignificantEvent = callbacks.onSignificantEvent || null;
   onError = callbacks.onError || console.error;
   _connect();
 }
@@ -67,6 +74,10 @@ function _connect() {
       const event_ = normalizeEvent(data);
       if (event_) {
         onMatchEvent(event_);
+        // Trigger AI pundit on significant events
+        if (onSignificantEvent && PUNDIT_TRIGGERS.has(event_.type)) {
+          onSignificantEvent(event_);
+        }
       }
 
     } catch (e) {
