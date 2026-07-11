@@ -1,4 +1,3 @@
-// program/src/lib.rs
 use anchor_lang::prelude::*;
 
 pub mod constants;
@@ -8,7 +7,7 @@ pub mod state;
 
 use instructions::*;
 
-declare_id!("11111111111111111111111111111111");
+declare_id!("9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B");
 
 #[program]
 pub mod kaching_settle {
@@ -28,11 +27,7 @@ pub mod kaching_settle {
         )
     }
 
-    pub fn deposit(
-        ctx: Context<Deposit>,
-        side: u8,
-        amount: u64,
-    ) -> Result<()> {
+    pub fn deposit(ctx: Context<Deposit>, side: u8, amount: u64) -> Result<()> {
         instructions::deposit::handler(ctx, side, amount)
     }
 
@@ -40,14 +35,19 @@ pub mod kaching_settle {
         instructions::lock_market::handler(ctx)
     }
 
-    pub fn settle(
-        ctx: Context<Settle>,
-        winning_side: u8,
-    ) -> Result<()> {
+    pub fn settle(ctx: Context<Settle>, winning_side: u8) -> Result<()> {
         instructions::settle::handler(ctx, winning_side)
     }
 
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
         instructions::claim::handler(ctx)
+    }
+
+    pub fn void_market(ctx: Context<VoidMarket>) -> Result<()> {
+        instructions::void_market::handler(ctx)
+    }
+
+    pub fn refund(ctx: Context<Refund>) -> Result<()> {
+        instructions::refund::handler(ctx)
     }
 }

@@ -1,6 +1,3 @@
-// program/src/errors.rs
-// Clear error messages for every failure mode.
-
 use anchor_lang::prelude::*;
 
 #[error_code]
@@ -8,7 +5,7 @@ pub enum KachingError {
     #[msg("Market is not open for deposits")]
     MarketNotOpen,
 
-    #[msg("Market is not locked — kickoff has not happened yet")]
+    #[msg("Market is not locked yet")]
     MarketNotLocked,
 
     #[msg("Market is not settled yet")]
@@ -40,4 +37,19 @@ pub enum KachingError {
 
     #[msg("Unauthorized — only the keeper can settle")]
     Unauthorized,
+
+    #[msg("Cannot void — both sides have funds and market has not expired")]
+    CannotVoid,
+
+    #[msg("Market is not voided")]
+    MarketNotVoid,
+
+    #[msg("Already refunded")]
+    AlreadyRefunded,
+
+    #[msg("You already have a position on the other side")]
+    SideMismatch,
+
+    #[msg("Market expired — kickoff was more than 7 days ago")]
+    MarketExpired,
 }

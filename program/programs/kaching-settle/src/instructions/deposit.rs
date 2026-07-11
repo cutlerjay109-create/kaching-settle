@@ -1,7 +1,3 @@
-// program/src/instructions/deposit.rs
-// User locks USDC into YES or NO vault.
-// Enforces minimum stake and kickoff deadline.
-
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use crate::constants::*;
@@ -22,7 +18,6 @@ pub struct Deposit<'info> {
     )]
     pub market: Account<'info, Market>,
 
-    // User's position account (created on first deposit)
     #[account(
         init_if_needed,
         payer = user,
@@ -32,11 +27,9 @@ pub struct Deposit<'info> {
     )]
     pub position: Account<'info, Position>,
 
-    // The vault to deposit into (YES or NO)
     #[account(mut)]
     pub vault: Account<'info, TokenAccount>,
 
-    // User's USDC token account
     #[account(mut)]
     pub user_token_account: Account<'info, TokenAccount>,
 
@@ -48,20 +41,19 @@ pub fn handler(ctx: Context<Deposit>, side: u8, amount: u64) -> Result<()> {
     let market = &mut ctx.accounts.market;
     let clock = Clock::get()?;
 
-    // Validate market is open
     require!(market.status == STATUS_OPEN, KachingError::MarketNotOpen);
-
-    // Validate kickoff hasn't passed
     require!(clock.unix_timestamp < market.kickoff_ts, KachingError::KickoffPassed);
-
-    // Validate side
     require!(side == SIDE_YES || side == SIDE_NO, KachingError::InvalidSide);
-
-    // Validate amount
     require!(amount >= MIN_STAKE, KachingError::BelowMinimumStake);
     require!(amount <= MAX_STAKE, KachingError::AboveMaximumStake);
 
-    // Transfer USDC from user to vault
+    let position = &mut ctx.accounts.position;
+
+    // Enforce same side on subsequent deposits
+    if position.amount > 0 {
+        require!(position.side == side, KachingError::SideMismatch);
+    }
+
     let transfer_ctx = CpiContext::new(
         ctx.accounts.token_program.to_account_info(),
         Transfer {
@@ -72,15 +64,12 @@ pub fn handler(ctx: Context<Deposit>, side: u8, amount: u64) -> Result<()> {
     );
     token::transfer(transfer_ctx, amount)?;
 
-    // Update market totals
     if side == SIDE_YES {
         market.yes_total = market.yes_total.checked_add(amount).unwrap();
     } else {
         market.no_total = market.no_total.checked_add(amount).unwrap();
     }
 
-    // Record position
-    let position = &mut ctx.accounts.position;
     position.fixture_id = market.fixture_id;
     position.user = ctx.accounts.user.key();
     position.side = side;
