@@ -197,99 +197,102 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
   const targetTs      = toBN(proof.ts ?? proof.targetTs ?? proof.target_ts ?? 0);
   const methodArgs    = { targetTs, fixtureSummary, fixtureProof, mainTreeProof, predicate, statA };
 
-  // ── Strategy: derive a candidate address, simulate, extract correct address
-  //    from error logs on ConstraintSeeds, retry once with the correct address.
-  // ────────────────────────────────────────────────────────────────────────────
+  // ── Strategy:
+  // 1. Use a dummy candidate address to trigger ConstraintSeeds error.
+  //    The program logs the CORRECT address ("Right: <addr>").
+  // 2. The correct address is seeded from the ts arg — but the ts arg must
+  //    ALSO match what's in the snapshot. The program checks both.
+  //    So we try all timestamps from the proof (ts, minTimestamp, maxTimestamp)
+  //    combined with the correct address extracted from step 1.
+  // ─────────────────────────────────────────────────────────────────────
 
-  // Candidate PDA — may not be right, but gives us the error log with the correct one
-  const tsMs   = Number(proof.ts ?? proof.targetTs ?? Date.now());
-  const today  = Math.floor(Date.now() / constants.MS_PER_DAY);
-  const proofDay = Math.floor(tsMs / constants.MS_PER_DAY);
-  const PROG_ID = new PublicKey(config.txline.programId);
+  const usTs = proof.summary?.updateStats || proof.summary?.update_stats || {};
+  // All candidate timestamps — the correct one seeds both the PDA and passes
+  // the TimestampMismatch check inside the program.
+  const tsValues = [
+    proof.ts,
+    usTs.maxTimestamp ?? usTs.max_timestamp,
+    usTs.minTimestamp ?? usTs.min_timestamp,
+  ].filter(v => v !== undefined && v !== null)
+   .map(v => new anchor.BN(String(v)));
 
-  function tryDerivePda(seed, day) {
-    try {
-      const [pda] = PublicKey.findProgramAddressSync(
-        [Buffer.from(seed), Buffer.from([day & 0xff, (day >> 8) & 0xff])],
-        PROG_ID
-      );
-      return pda.toBase58();
-    } catch (e) { return null; }
+  // Remove duplicates by string value
+  const uniqueTs = [];
+  const seenTs = new Set();
+  for (const t of tsValues) {
+    const k = t.toString();
+    if (!seenTs.has(k)) { seenTs.add(k); uniqueTs.push(t); }
   }
 
-  // Try a few derivations; one might be right, and if not, error logs will fix it
-  const candidates = [
-    tryDerivePda("daily_scores_merkle_roots", proofDay),
-    tryDerivePda("daily_scores_roots", proofDay),
-    tryDerivePda("daily_scores_merkle_roots", today),
-    tryDerivePda("daily_scores_roots", today),
-  ].filter(Boolean);
+  // Step 1: get the correct account address using the first ts candidate.
+  // We pass a garbage PDA — the only goal is to get the "Right:" address from logs.
+  const PROG_ID = new PublicKey(config.txline.programId);
+  const dummyPda = PublicKey.findProgramAddressSync(
+    [Buffer.from("dummy")], PROG_ID
+  )[0].toBase58();
 
-  // Deduplicate
-  const tried = new Set();
-
-  for (const candidate of candidates) {
-    if (tried.has(candidate)) continue;
-    tried.add(candidate);
-
-    try {
-      console.log(`[validate] Trying address: ${candidate.slice(0,12)}...`);
-      const sim = await simulateWithAddress(program, methodArgs, candidate);
-      const logs = sim?.raw || [];
-
-      const result = parseResultFromLogs(logs);
-      if (result !== null) {
-        console.log(`[validate] Result: ${result}`);
-        return {
-          result,
-          proof: {
-            fixtureId, statKey, threshold, comparison,
-            targetTs: String(proof.ts ?? 0),
-            dailyScoresMerkleRoots: candidate,
-          },
-        };
-      }
-
-      // Success but no parseable result — log and continue
-      console.log("[validate] Sim logs:", JSON.stringify(logs.slice(0, 6)));
-      throw new Error("Could not parse result from logs: " + JSON.stringify(logs.slice(0, 5)));
-
-    } catch (simErr) {
-      const simLogs = simErr?.simulationResponse?.logs || simErr?.logs || [];
-      const correctAddr = extractCorrectAddressFromLogs(simLogs);
-
-      if (correctAddr && !tried.has(correctAddr)) {
-        console.log(`[validate] ConstraintSeeds — retrying with correct address: ${correctAddr.slice(0,12)}...`);
-        tried.add(correctAddr);
-        try {
-          const sim2 = await simulateWithAddress(program, methodArgs, correctAddr);
-          const logs2 = sim2?.raw || [];
-          const result = parseResultFromLogs(logs2);
-          if (result !== null) {
-            console.log(`[validate] Result: ${result}`);
-            return {
-              result,
-              proof: {
-                fixtureId, statKey, threshold, comparison,
-                targetTs: String(proof.ts ?? 0),
-                dailyScoresMerkleRoots: correctAddr,
-              },
-            };
-          }
-          console.log("[validate] Sim2 logs:", JSON.stringify(logs2.slice(0, 6)));
-          throw new Error("Could not parse result: " + JSON.stringify(logs2.slice(0, 5)));
-        } catch (e2) {
-          throw new Error(`validateStat retry failed: ${e2.message || JSON.stringify(e2)}`);
-        }
-      }
-
-      // No correct address in logs — propagate
-      const detail = simErr.message || JSON.stringify(simErr);
-      throw new Error(`validateStat failed: ${detail}`);
+  let correctAddr = null;
+  try {
+    const dummySim = await simulateWithAddress(
+      program,
+      { ...methodArgs, targetTs: uniqueTs[0] },
+      dummyPda
+    );
+    // Unexpectedly succeeded — use it
+    const logs = dummySim?.raw || [];
+    const result = parseResultFromLogs(logs);
+    if (result !== null) {
+      console.log(`[validate] Result: ${result} (first try)`);
+      return {
+        result,
+        proof: { fixtureId, statKey, threshold, comparison,
+          targetTs: uniqueTs[0].toString(), dailyScoresMerkleRoots: dummyPda },
+      };
+    }
+  } catch (e) {
+    const simLogs = e?.simulationResponse?.logs || e?.logs || [];
+    correctAddr = extractCorrectAddressFromLogs(simLogs);
+    if (correctAddr) {
+      console.log(`[validate] Extracted correct address: ${correctAddr.slice(0,12)}...`);
+    } else {
+      throw new Error("Could not extract account address from error: " + JSON.stringify(simLogs.slice(0,5)));
     }
   }
 
-  throw new Error("validateStat failed: no candidate addresses to try");
+  if (!correctAddr) throw new Error("validateStat: no correct address found");
+
+  // Step 2: try each ts value with the correct address until one succeeds.
+  let lastErr = null;
+  for (const tsVal of uniqueTs) {
+    console.log(`[validate] Trying ts=${tsVal.toString()} with correct address...`);
+    try {
+      const sim = await simulateWithAddress(
+        program,
+        { ...methodArgs, targetTs: tsVal },
+        correctAddr
+      );
+      const logs = sim?.raw || [];
+      const result = parseResultFromLogs(logs);
+      if (result !== null) {
+        console.log(`[validate] Result: ${result} (ts=${tsVal.toString()})`);
+        return {
+          result,
+          proof: { fixtureId, statKey, threshold, comparison,
+            targetTs: tsVal.toString(), dailyScoresMerkleRoots: correctAddr },
+        };
+      }
+      console.log("[validate] Logs:", JSON.stringify(logs.slice(0,5)));
+      lastErr = new Error("Could not parse result: " + JSON.stringify(logs.slice(0,5)));
+    } catch (e) {
+      const detail = e?.simulationResponse
+        ? JSON.stringify(e.simulationResponse.logs?.slice(0,3))
+        : (e.message || String(e));
+      console.error(`[validate] ts=${tsVal.toString()} failed: ${detail}`);
+      lastErr = e;
+    }
+  }
+
+  throw new Error(`validateStat failed after all ts candidates: ${lastErr?.message || lastErr}`);
 }
 
 module.exports = { verifyStat, fetchProof };
