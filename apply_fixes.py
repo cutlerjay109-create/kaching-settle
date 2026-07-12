@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Kaching Settle — full fix pack v2 (adds null-safe proof parsing)
-"""
 import os
 
 FILES = {}
@@ -1113,10 +1110,41 @@ function toBytes32(val) {
 }
 
 function dailyScoresRootPda(epochDay) {
+  // Seed confirmed from IDL account name: "daily_scores_merkle_roots"
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("daily_scores_roots"), Buffer.from([epochDay & 0xff, (epochDay >> 8) & 0xff])],
+    [Buffer.from("daily_scores_merkle_roots"), Buffer.from([epochDay & 0xff, (epochDay >> 8) & 0xff])],
     new PublicKey(config.txline.programId)
   )[0];
+}
+
+// Parse the boolean result from program logs.
+// The Txoracle program emits "Program log: <true|false>" or
+// "Program return: <base64>" depending on version.
+// We check both patterns.
+function parseResultFromLogs(logs) {
+  if (!logs || !logs.length) return null;
+  for (const line of logs) {
+    // "Program log: true" / "Program log: false"
+    if (/program log:\s*true/i.test(line)) return true;
+    if (/program log:\s*false/i.test(line)) return false;
+    // "Program return: <programId> <base64bool>"
+    const m = line.match(/Program return:\S*\s+(\S+)/);
+    if (m) {
+      try {
+        const buf = Buffer.from(m[1], "base64");
+        return buf[0] !== 0;
+      } catch(e) {}
+    }
+    // "Program data: <base64>"
+    const d = line.match(/Program data:\s+(\S+)/);
+    if (d) {
+      try {
+        const buf = Buffer.from(d[1], "base64");
+        return buf[0] !== 0;
+      } catch(e) {}
+    }
+  }
+  return null;
 }
 
 // Epoch days to try, in order: the proof's day first, then today.
@@ -1188,8 +1216,9 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
   for (const epochDay of candidateEpochDays(proof.targetTs)) {
     const dailyScoresRoot = dailyScoresRootPda(epochDay);
     try {
-      // .view() — read-only simulation, returns true/false
-      const result = await program.methods
+      // .view() is not supported by this program — use .simulate() and
+      // parse the boolean result from the transaction logs instead.
+      const sim = await program.methods
         .validateStat(
           new anchor.BN(proof.targetTs),
           fixtureSummary,
@@ -1201,7 +1230,15 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
           null  // op
         )
         .accounts({ dailyScoresRoot })
-        .view({ commitment: "confirmed" });
+        .simulate({ commitment: "confirmed" });
+
+      const logs = sim?.raw || sim?.events || sim?.logs || [];
+      console.log("[validate] Simulation logs:", logs.slice(0, 10));
+
+      const result = parseResultFromLogs(logs);
+      if (result === null) {
+        throw new Error("Could not parse boolean result from simulation logs: " + JSON.stringify(logs.slice(0,5)));
+      }
 
       console.log(`[validate] Result: ${result} (epochDay ${epochDay})`);
       return {
@@ -2631,17 +2668,13 @@ main().catch(e => { console.error("Error:", e.message); process.exit(1); });
 
 
 def main():
-    if not os.path.isdir("backend") and not os.path.isdir("program"):
-        print("ERROR: run from kaching-settle repo root")
-        return
+    if not os.path.isdir("backend"):
+        print("ERROR: run from kaching-settle repo root"); return
     for path, content in FILES.items():
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
+        with open(path, "w") as f: f.write(content)
         print("wrote", path, f"({len(content)} bytes)")
-    print()
-    print("Done.")
-    print("Push: git add -A && git commit -m 'fix: null-safe proof parsing' && git push")
+    print("\nDone.")
+    print("Push: git add -A && git commit -m 'fix: simulate not view, correct PDA seed' && git push")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
