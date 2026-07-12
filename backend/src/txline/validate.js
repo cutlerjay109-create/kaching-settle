@@ -1,12 +1,8 @@
 // backend/src/txline/validate.js
 // Verifies a TxLINE stat proof using the Txoracle on-chain program.
 //
-// KEY INSIGHT: The dailyScoresMerkleRoots account address cannot be derived
-// off-chain (the program's seed logic is opaque). Instead we:
-//   1. Try to simulate with our best-guess address.
-//   2. If the sim returns ConstraintSeeds (error 2006), extract the CORRECT
-//      address from the program logs ("Right: <address>") and retry once.
-// This is robust regardless of whatever seed formula TxLINE uses.
+// DIAGNOSTIC VERSION — dumps full proof structure for every seq attempt
+// so we can identify the correct seq, field names, and stat values in one pass.
 
 const axios = require("axios");
 const anchor = require("@coral-xyz/anchor");
@@ -22,14 +18,11 @@ let _program = null;
 
 async function getProgram() {
   if (_program) return _program;
-
   const connection = new Connection(config.rpc, "confirmed");
   const idlPath = path.join(__dirname, "../../idl/txoracle.json");
   const idl = JSON.parse(fs.readFileSync(idlPath, "utf8"));
-
   const decoder = bs58.default || bs58;
   const wallet = Keypair.fromSecretKey(decoder.decode(process.env.WALLET_KEYPAIR.trim()));
-
   const provider = new anchor.AnchorProvider(
     connection,
     {
@@ -39,25 +32,68 @@ async function getProgram() {
     },
     { commitment: "confirmed" }
   );
-
   _program = new anchor.Program(idl, provider);
   return _program;
 }
 
-async function fetchProof(fixtureId, statKey, seq = 1) {
-  try {
-    const res = await axios.get(`${config.txline.host}/api/scores/stat-validation`, {
-      headers: makeHeaders(),
-      params: { fixtureId, seq, statKey },
-      timeout: 20000,
-    });
-    return res.data;
-  } catch (e) {
-    throw new Error(`fetchProof failed: ${e.response?.data?.message || e.message}`);
-  }
+// ── Raw proof fetcher ──────────────────────────────────────────────────────
+async function fetchProofRaw(fixtureId, statKey, seq) {
+  const params = { fixtureId, statKey };
+  if (seq !== undefined) params.seq = seq;
+  const res = await axios.get(`${config.txline.host}/api/scores/stat-validation`, {
+    headers: makeHeaders(),
+    params,
+    timeout: 20000,
+  });
+  return res.data;
 }
 
-// Convert any hash representation to a plain number[] of length 32
+// Fetch all available seq values and return the one with the highest stat value.
+// Logs every seq attempt so we can see the full picture in Railway.
+async function fetchBestProof(fixtureId, statKey) {
+  // Try without seq (API default), then seq 0 through 20
+  const seqsToTry = [undefined, ...Array.from({length: 21}, (_, i) => i)];
+  
+  let bestProof = null;
+  let bestValue = -1;
+  let results = [];
+
+  for (const seq of seqsToTry) {
+    try {
+      const proof = await fetchProofRaw(fixtureId, statKey, seq);
+      const stp = proof.statToProve || proof.stat_to_prove || {};
+      const val = Number(stp.value ?? 0);
+      const ts = proof.ts;
+      const updateCount = proof.summary?.updateStats?.updateCount ?? proof.summary?.update_stats?.update_count ?? '?';
+      results.push({ seq: seq === undefined ? 'none' : seq, value: val, ts, updateCount });
+      
+      if (val > bestValue) {
+        bestValue = val;
+        bestProof = proof;
+      }
+
+      // Once we start getting the same value multiple times, we've hit the end
+      // But keep going to find the maximum
+    } catch (e) {
+      const msg = e.response?.data?.message || e.response?.status || e.message;
+      results.push({ seq: seq === undefined ? 'none' : seq, error: msg });
+      // If seq errors after finding some results, we've gone past the end
+      if (seq !== undefined && seq > 0 && results.filter(r => !r.error).length > 0 && 
+          results.filter(r => r.error).length >= 3) {
+        break; // 3 consecutive errors = past end of available seqs
+      }
+    }
+  }
+
+  console.log(`[validate] Proof seq scan for fixture ${fixtureId} statKey ${statKey}:`);
+  console.log(JSON.stringify(results, null, 2));
+  console.log(`[validate] Best proof: seq with value=${bestValue}`);
+
+  if (!bestProof) throw new Error("No valid proof found for any seq");
+  return bestProof;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
 function toU8Array32(val) {
   if (val === null || val === undefined) return Array(32).fill(0);
   let buf;
@@ -70,9 +106,7 @@ function toU8Array32(val) {
       buf = Array.from(Buffer.from(val, "base64"));
   } else if (Buffer.isBuffer(val) || val instanceof Uint8Array) {
     buf = Array.from(val);
-  } else {
-    return Array(32).fill(0);
-  }
+  } else return Array(32).fill(0);
   if (buf.length < 32) return [...buf, ...Array(32 - buf.length).fill(0)];
   if (buf.length > 32) return buf.slice(0, 32);
   return buf.map(Number);
@@ -93,9 +127,6 @@ function mapNode(node) {
   };
 }
 
-// Extract the correct account address from ConstraintSeeds error logs.
-// The program prints:
-//   "Program log: Left:\n  <passed>\nProgram log: Right:\n  <correct>"
 function extractCorrectAddressFromLogs(logs) {
   if (!logs) return null;
   for (let i = 0; i < logs.length; i++) {
@@ -103,14 +134,12 @@ function extractCorrectAddressFromLogs(logs) {
       const addr = logs[i + 1].replace(/^Program log:\s*/, "").trim();
       try { new PublicKey(addr); return addr; } catch (e) {}
     }
-    // Sometimes "Right:" and the address are on the same line
     const m = logs[i].match(/Right:\s*([1-9A-HJ-NP-Za-km-z]{32,44})/);
     if (m) { try { new PublicKey(m[1]); return m[1]; } catch(e) {} }
   }
   return null;
 }
 
-// Parse boolean result from simulation logs
 function parseResultFromLogs(logs) {
   if (!logs || !logs.length) return null;
   for (const line of logs) {
@@ -124,22 +153,8 @@ function parseResultFromLogs(logs) {
   return null;
 }
 
-// Build the Anchor method call (args only — no account yet)
-function buildMethodCall(program, proof, predicate, fixtureSummary, fixtureProof, mainTreeProof, statA, targetTs) {
-  return program.methods.validateStat(
-    targetTs,
-    fixtureSummary,
-    fixtureProof,
-    mainTreeProof,
-    predicate,
-    statA,
-    null,
-    null
-  );
-}
-
-async function simulateWithAddress(program, methodArgs, dailyScoresMerkleRoots) {
-  const { targetTs, fixtureSummary, fixtureProof, mainTreeProof, predicate, statA } = methodArgs;
+async function simulateWithAddress(program, args, dailyScoresMerkleRoots, targetTs) {
+  const { fixtureSummary, fixtureProof, mainTreeProof, predicate, statA } = args;
   const sim = await program.methods
     .validateStat(targetTs, fixtureSummary, fixtureProof, mainTreeProof, predicate, statA, null, null)
     .accounts({ dailyScoresMerkleRoots: new PublicKey(dailyScoresMerkleRoots) })
@@ -147,27 +162,29 @@ async function simulateWithAddress(program, methodArgs, dailyScoresMerkleRoots) 
   return sim;
 }
 
+// ── Main ───────────────────────────────────────────────────────────────────
 async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
   console.log(`[validate] Verifying fixture ${fixtureId} statKey ${statKey}...`);
 
-  const proof = await fetchProof(fixtureId, statKey);
-  console.log("[validate] Proof fetched, ts:", proof.ts);
-  console.log("[validate] statToProve:", JSON.stringify(proof.statToProve ?? proof.stat_to_prove));
-  const _sum = proof.summary || {};
-  console.log("[validate] summary updateStats:", JSON.stringify(_sum.updateStats ?? _sum.update_stats));
-  console.log("[validate] eventStatsSubTreeRoot present:", !!(_sum.eventStatsSubTreeRoot ?? _sum.eventsSubTreeRoot ?? _sum.events_sub_tree_root));
+  const proof = await fetchBestProof(fixtureId, statKey);
 
   const program = await getProgram();
 
-  // TraderPredicate — threshold is i32
+  // TraderPredicate
   const predicate = {
     threshold: Number(threshold) || 0,
     comparison: comparison === "lessThan" ? { lessThan: {} } : { greaterThan: {} },
   };
 
-  // ScoresBatchSummary
+  // ScoresBatchSummary — handle all known field name variants
   const summary = proof.summary || {};
   const us = summary.updateStats || summary.update_stats || {};
+  // eventStatsSubTreeRoot is the ACTUAL field name from the API (confirmed from logs)
+  const eventsRoot = summary.eventStatsSubTreeRoot
+    ?? summary.eventsSubTreeRoot
+    ?? summary.events_sub_tree_root
+    ?? summary.event_stats_sub_tree_root;
+
   const fixtureSummary = {
     fixtureId: toBN(summary.fixtureId ?? summary.fixture_id ?? fixtureId),
     updateStats: {
@@ -175,10 +192,10 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
       minTimestamp: toBN(us.minTimestamp ?? us.min_timestamp ?? 0),
       maxTimestamp: toBN(us.maxTimestamp ?? us.max_timestamp ?? 0),
     },
-    eventsSubTreeRoot: toU8Array32(summary.eventStatsSubTreeRoot ?? summary.eventsSubTreeRoot ?? summary.events_sub_tree_root ?? summary.event_stats_sub_tree_root),
+    eventsSubTreeRoot: toU8Array32(eventsRoot),
   };
 
-  // StatTerm (statA)
+  // StatTerm
   const stp = proof.statToProve || proof.stat_to_prove || {};
   const statA = {
     statToProve: {
@@ -192,107 +209,83 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
 
   const fixtureProof  = (proof.subTreeProof   || proof.sub_tree_proof   || []).map(mapNode);
   const mainTreeProof = (proof.mainTreeProof   || proof.main_tree_proof  || []).map(mapNode);
-  const targetTs      = toBN(proof.ts ?? proof.targetTs ?? proof.target_ts ?? 0);
-  const methodArgs    = { targetTs, fixtureSummary, fixtureProof, mainTreeProof, predicate, statA };
+  const args = { fixtureSummary, fixtureProof, mainTreeProof, predicate, statA };
 
-  // ── Strategy:
-  // 1. Use a dummy candidate address to trigger ConstraintSeeds error.
-  //    The program logs the CORRECT address ("Right: <addr>").
-  // 2. The correct address is seeded from the ts arg — but the ts arg must
-  //    ALSO match what's in the snapshot. The program checks both.
-  //    So we try all timestamps from the proof (ts, minTimestamp, maxTimestamp)
-  //    combined with the correct address extracted from step 1.
-  // ─────────────────────────────────────────────────────────────────────
-
-  const usTs = proof.summary?.updateStats || proof.summary?.update_stats || {};
-  // All candidate timestamps — the correct one seeds both the PDA and passes
-  // the TimestampMismatch check inside the program.
-  // minTimestamp gets furthest (passes ConstraintSeeds + TimestampMismatch), try it first
+  // ts candidates — minTimestamp gets furthest through validation
+  const usTs = us;
   const tsValues = [
     usTs.minTimestamp ?? usTs.min_timestamp,
     usTs.maxTimestamp ?? usTs.max_timestamp,
     proof.ts,
-  ].filter(v => v !== undefined && v !== null)
-   .map(v => new anchor.BN(String(v)));
-
-  // Remove duplicates by string value
+  ].filter(v => v != null).map(v => new anchor.BN(String(v)));
   const uniqueTs = [];
   const seenTs = new Set();
   for (const t of tsValues) {
-    const k = t.toString();
-    if (!seenTs.has(k)) { seenTs.add(k); uniqueTs.push(t); }
+    if (!seenTs.has(t.toString())) { seenTs.add(t.toString()); uniqueTs.push(t); }
   }
 
-  // Step 1: get the correct account address using the first ts candidate.
-  // We pass a garbage PDA — the only goal is to get the "Right:" address from logs.
+  // Step 1: get correct account address via dummy PDA → ConstraintSeeds error
   const PROG_ID = new PublicKey(config.txline.programId);
-  const dummyPda = PublicKey.findProgramAddressSync(
-    [Buffer.from("dummy")], PROG_ID
-  )[0].toBase58();
+  const dummyPda = PublicKey.findProgramAddressSync([Buffer.from("dummy")], PROG_ID)[0].toBase58();
 
   let correctAddr = null;
   try {
-    const dummySim = await simulateWithAddress(
-      program,
-      { ...methodArgs, targetTs: uniqueTs[0] },
-      dummyPda
-    );
-    // Unexpectedly succeeded — use it
-    const logs = dummySim?.raw || [];
+    const sim = await simulateWithAddress(program, args, dummyPda, uniqueTs[0]);
+    const logs = sim?.raw || [];
     const result = parseResultFromLogs(logs);
     if (result !== null) {
       console.log(`[validate] Result: ${result} (first try)`);
-      return {
-        result,
-        proof: { fixtureId, statKey, threshold, comparison,
-          targetTs: uniqueTs[0].toString(), dailyScoresMerkleRoots: dummyPda },
-      };
+      return { result, proof: { fixtureId, statKey, threshold, comparison,
+        targetTs: uniqueTs[0].toString(), dailyScoresMerkleRoots: dummyPda } };
     }
   } catch (e) {
-    const simLogs = e?.simulationResponse?.logs || e?.logs || [];
+    const simLogs = e?.simulationResponse?.logs || [];
     correctAddr = extractCorrectAddressFromLogs(simLogs);
     if (correctAddr) {
       console.log(`[validate] Extracted correct address: ${correctAddr.slice(0,12)}...`);
     } else {
-      throw new Error("Could not extract account address from error: " + JSON.stringify(simLogs.slice(0,5)));
+      const detail = e?.simulationResponse
+        ? JSON.stringify({ err: e.simulationResponse.err, logs: e.simulationResponse.logs?.slice(0,5) })
+        : (e.message || String(e));
+      throw new Error("Could not extract account address: " + detail);
     }
   }
 
-  if (!correctAddr) throw new Error("validateStat: no correct address found");
-
-  // Step 2: try each ts value with the correct address until one succeeds.
+  // Step 2: try each ts with correct address
   let lastErr = null;
   for (const tsVal of uniqueTs) {
-    console.log(`[validate] Trying ts=${tsVal.toString()} with correct address...`);
     try {
-      const sim = await simulateWithAddress(
-        program,
-        { ...methodArgs, targetTs: tsVal },
-        correctAddr
-      );
+      const sim = await simulateWithAddress(program, args, correctAddr, tsVal);
       const logs = sim?.raw || [];
       const result = parseResultFromLogs(logs);
       if (result !== null) {
         console.log(`[validate] Result: ${result} (ts=${tsVal.toString()})`);
-        return {
-          result,
-          proof: { fixtureId, statKey, threshold, comparison,
-            targetTs: tsVal.toString(), dailyScoresMerkleRoots: correctAddr },
-        };
+        return { result, proof: { fixtureId, statKey, threshold, comparison,
+          targetTs: tsVal.toString(), dailyScoresMerkleRoots: correctAddr } };
       }
-      console.log("[validate] Logs:", JSON.stringify(logs.slice(0,5)));
-      lastErr = new Error("Could not parse result: " + JSON.stringify(logs.slice(0,5)));
+      lastErr = new Error("Could not parse result from logs: " + JSON.stringify(logs.slice(0,5)));
     } catch (e) {
       const simResp = e?.simulationResponse;
+      const simLogs = simResp?.logs || [];
+
+      // StatNotZero (6074) = proof verified, predicate evaluated to FALSE
+      const isStatNotZero = simResp?.err?.InstructionError?.[1]?.Custom === 6074 ||
+        simLogs.some(l => l.includes("StatNotZero"));
+      if (isStatNotZero) {
+        console.log(`[validate] StatNotZero — predicate FALSE (result: false, ts=${tsVal.toString()})`);
+        return { result: false, proof: { fixtureId, statKey, threshold, comparison,
+          targetTs: tsVal.toString(), dailyScoresMerkleRoots: correctAddr } };
+      }
+
       const detail = simResp
-        ? JSON.stringify({ err: simResp.err, logs: simResp.logs })
+        ? JSON.stringify({ err: simResp.err, logs: simLogs.slice(0,5) })
         : (e.message || String(e));
       console.error(`[validate] ts=${tsVal.toString()} failed: ${detail}`);
       lastErr = e;
     }
   }
 
-  throw new Error(`validateStat failed after all ts candidates: ${lastErr?.message || lastErr}`);
+  throw new Error(`validateStat failed: ${lastErr?.message || lastErr}`);
 }
 
-module.exports = { verifyStat, fetchProof };
+module.exports = { verifyStat, fetchProof: fetchBestProof };
