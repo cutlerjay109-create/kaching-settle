@@ -244,7 +244,12 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
       };
     } catch (e) {
       lastError = e;
-      console.error(`[validate] validateStat failed for epochDay ${epochDay}: ${e.message}`);
+      // Log full error — message alone is often empty for Anchor/RPC errors
+      const detail = e.message || JSON.stringify(e) || String(e);
+      const logs = e.logs || e.simulationResponse?.logs || [];
+      console.error(`[validate] validateStat failed for epochDay ${epochDay}: ${detail}`);
+      if (logs.length) console.error("[validate] Sim error logs:", JSON.stringify(logs.slice(0, 15)));
+      if (e.stack && !detail) console.error("[validate] Stack:", e.stack.slice(0, 500));
     }
   }
 
