@@ -134,9 +134,15 @@ function extractCorrectAddressFromLogs(logs) {
 function parseResultFromLogs(logs) {
   if (!logs || !logs.length) return null;
   for (const line of logs) {
-    if (/program log:\s*true/i.test(line)) return true;
-    if (/program log:\s*false/i.test(line)) return false;
-    const m = line.match(/Program return:\S*\s+(\S+)/);
+    // Most reliable: explicit predicate evaluation line from the program
+    if (/Evaluate predicate to:\s*true/i.test(line)) return true;
+    if (/Evaluate predicate to:\s*false/i.test(line)) return false;
+    // Program log: true / Program log: false
+    if (/^Program log:\s*true$/i.test(line)) return true;
+    if (/^Program log:\s*false$/i.test(line)) return false;
+    // Program return: <programId> <base64value>
+    // Skip the programId (first token), read the second token (the actual value)
+    const m = line.match(/Program return:\s*\S+\s+(\S+)/);
     if (m) { try { return Buffer.from(m[1], "base64")[0] !== 0; } catch(e) {} }
   }
   return null;
