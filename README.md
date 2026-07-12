@@ -285,19 +285,37 @@ node scripts/decode-market.js 18213979
 node scripts/decode-market.js <base64data>
 ```
 
-### France vs Morocco — Settled market
+### France vs Spain — Open market (pre-match)
+
+**Raw account data (base64):**
+```
+277VNwDjxppuRhYBAAAAACcAAABXaWxsIEZyYW5jZSBzY29yZSBhIGdvYWwgYWdhaW5zdCBTcGFpbj8w
+h1ZqAAAAAAEAAAAAAAAAAAAAAAAACT0AAAAAAEBCDwAAAAAAAP/1qsS+5oJnOSMsHOnOvBzWxaREGDTH
+Q9I915fru/cddf///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+```
 
 **Decoded:**
 ```
-Fixture ID:    18209181
-Question:      Will France score a goal against Morocco?
-Kickoff:       2026-07-09 20:00:00 UTC
+Fixture ID:    18237038
+Question:      Will France score a goal against Spain?
+Kickoff:       2026-07-14 19:00:00 UTC
 Stat Key:      1 (Participant1 goals)
 Comparison:    greaterThan
-YES Total:     $2.00 USDC
-NO Total:      $0.00 USDC
-Status:        SETTLED ✅
-Winning Side:  YES — France scored
+YES Total:     $4.00 USDC  →  1.25x if right
+NO Total:      $1.00 USDC  →  5.00x if right
+Status:        OPEN — accepting deposits until kickoff
+Winning Side:  Not yet decided
+```
+
+### France vs Spain — Settled market (post July 14)
+
+*This section will be updated after the match settles on July 14, 2026.*
+
+```
+Fixture ID:    18237038
+Question:      Will France score a goal against Spain?
+Status:        SETTLED ✅  ← to be updated after full time
+Winning Side:  YES / NO    ← decided by TxLINE Merkle proof
 ```
 
 ### What changes at settlement
