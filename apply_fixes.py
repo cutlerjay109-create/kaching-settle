@@ -1195,6 +1195,12 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
 
   const proof = await fetchProof(fixtureId, statKey);
   console.log("[validate] Proof fetched, ts:", proof.ts);
+  console.log("[validate] summary keys:", Object.keys(proof.summary || {}));
+  console.log("[validate] summary:", JSON.stringify({
+    fixtureId: proof.summary?.fixtureId ?? proof.summary?.fixture_id,
+    updateStats: proof.summary?.updateStats ?? proof.summary?.update_stats,
+    eventsSubTreeRoot: "[bytes]",
+  }));
 
   const program = await getProgram();
 
@@ -2743,7 +2749,7 @@ def main():
         with open(path, "w") as f: f.write(content)
         print("wrote", path, f"({len(content)} bytes)")
     print("\nDone.")
-    print("Push: git add -A && git commit -m \'fix: self-correcting PDA from error logs\' && git push")
+    print("Push: git add -A && git commit -m \'debug: log summary timestamps\' && git push")
 
 
 if __name__ == "__main__": main()

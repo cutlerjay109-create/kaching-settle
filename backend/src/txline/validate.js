@@ -152,6 +152,12 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
 
   const proof = await fetchProof(fixtureId, statKey);
   console.log("[validate] Proof fetched, ts:", proof.ts);
+  console.log("[validate] summary keys:", Object.keys(proof.summary || {}));
+  console.log("[validate] summary:", JSON.stringify({
+    fixtureId: proof.summary?.fixtureId ?? proof.summary?.fixture_id,
+    updateStats: proof.summary?.updateStats ?? proof.summary?.update_stats,
+    eventsSubTreeRoot: "[bytes]",
+  }));
 
   const program = await getProgram();
 
