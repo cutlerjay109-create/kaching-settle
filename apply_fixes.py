@@ -1229,7 +1229,7 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
           null, // stat2 — not needed for single-stat markets
           null  // op
         )
-        .accounts({ dailyScoresRoot })
+        .accounts({ dailyScoresMerkleRoots: dailyScoresRoot })
         .simulate({ commitment: "confirmed" });
 
       const logs = sim?.raw || sim?.events || sim?.logs || [];
@@ -2675,6 +2675,6 @@ def main():
         with open(path, "w") as f: f.write(content)
         print("wrote", path, f"({len(content)} bytes)")
     print("\nDone.")
-    print("Push: git add -A && git commit -m 'fix: simulate not view, correct PDA seed' && git push")
+    print("Push: git add -A && git commit -m 'fix: correct account key dailyScoresMerkleRoots' && git push")
 
 if __name__ == "__main__": main()

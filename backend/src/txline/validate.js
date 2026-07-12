@@ -186,7 +186,7 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
           null, // stat2 — not needed for single-stat markets
           null  // op
         )
-        .accounts({ dailyScoresRoot })
+        .accounts({ dailyScoresMerkleRoots: dailyScoresRoot })
         .simulate({ commitment: "confirmed" });
 
       const logs = sim?.raw || sim?.events || sim?.logs || [];
