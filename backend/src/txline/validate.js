@@ -67,6 +67,13 @@ async function fetchProof(fixtureId, statKey, seq = 1) {
       params: { fixtureId, seq, statKey },
       timeout: 20000,
     });
+    // Log ALL top-level keys so we can find the dailyScoresMerkleRoots address field
+    console.log("[validate] Proof keys:", Object.keys(res.data));
+    console.log("[validate] Proof top-level:", JSON.stringify(
+      Object.fromEntries(
+        Object.entries(res.data).map(([k,v]) => [k, typeof v === 'object' && v !== null ? '[object]' : v])
+      )
+    ));
     return res.data;
   } catch (e) {
     throw new Error(`fetchProof failed: ${e.response?.data?.message || e.message}`);

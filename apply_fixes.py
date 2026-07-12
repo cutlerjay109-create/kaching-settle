@@ -1110,6 +1110,13 @@ async function fetchProof(fixtureId, statKey, seq = 1) {
       params: { fixtureId, seq, statKey },
       timeout: 20000,
     });
+    // Log ALL top-level keys so we can find the dailyScoresMerkleRoots address field
+    console.log("[validate] Proof keys:", Object.keys(res.data));
+    console.log("[validate] Proof top-level:", JSON.stringify(
+      Object.fromEntries(
+        Object.entries(res.data).map(([k,v]) => [k, typeof v === 'object' && v !== null ? '[object]' : v])
+      )
+    ));
     return res.data;
   } catch (e) {
     throw new Error(`fetchProof failed: ${e.response?.data?.message || e.message}`);
@@ -2720,7 +2727,7 @@ def main():
         with open(path, "w") as f: f.write(content)
         print("wrote", path, f"({len(content)} bytes)")
     print("\nDone.")
-    print("Push: git add -A && git commit -m \'fix: keeper wallet as simulate fee payer\' && git push")
+    print("Push: git add -A && git commit -m \'fix: log proof keys\' && git push")
 
 
 if __name__ == "__main__": main()
