@@ -5,7 +5,6 @@ import WalletButton from "../components/WalletButton";
 
 const BACKEND = "https://kaching-settle-production.up.railway.app";
 
-// Fallback list — only used if the backend market list can't be fetched.
 const KNOWN_MARKETS = [
   { fixtureId: 18209181, name: "France vs Morocco", question: "Will France score a goal against Morocco?" },
   { fixtureId: 18218149, name: "Spain vs Belgium", question: "Will Spain score a goal against Belgium?" },
@@ -19,12 +18,9 @@ const KNOWN_MARKETS = [
 const STATUS = { 0: "Open", 1: "Locked", 2: "Settled", 3: "Voided" };
 const SIDE = { 0: "YES", 1: "NO" };
 
-// Merge the backend's live market list with the hardcoded fallback,
-// deduped by fixtureId.
 async function loadMarketList() {
   const byId = new Map();
   for (const m of KNOWN_MARKETS) byId.set(m.fixtureId, m);
-
   try {
     const res = await fetch(`${BACKEND}/api/markets`);
     const list = await res.json();
@@ -38,10 +34,23 @@ async function loadMarketList() {
         });
       }
     }
-  } catch (e) {
-    // backend unreachable — fallback list still works
-  }
+  } catch (e) {}
   return Array.from(byId.values());
+}
+
+// Fetch final score from backend snapshot
+async function fetchScore(fixtureId) {
+  try {
+    const res = await fetch(`${BACKEND}/api/scores/snapshot/${fixtureId}`);
+    const data = await res.json();
+    if (Array.isArray(data) && data.length > 0) {
+      const s = data[data.length - 1];
+      const home = s.Participant1Goals ?? s.HomeGoals ?? s.homeGoals ?? null;
+      const away = s.Participant2Goals ?? s.AwayGoals ?? s.awayGoals ?? null;
+      if (home !== null && away !== null) return `${home}-${away}`;
+    }
+  } catch (e) {}
+  return null;
 }
 
 export default function MyPositions() {
@@ -63,18 +72,15 @@ export default function MyPositions() {
 
     for (const m of markets) {
       try {
-        // Check if market exists and get its state
         const market = await getMarket(m.fixtureId);
         if (!market) continue;
 
-        // Check if user has a position
         const positionPda = getPositionPda(m.fixtureId, publicKey.toBase58());
         const info = await connection.getAccountInfo(positionPda);
         if (!info) continue;
 
-        // Decode position
         const d = info.data;
-        let o = 8 + 8 + 32; // discriminator + fixture_id + user
+        let o = 8 + 8 + 32;
         const side = d.readUInt8(o); o += 1;
         const amount = Number(d.readBigUInt64LE(o)) / 1e6; o += 8;
         const claimed = d.readUInt8(o) === 1;
@@ -82,6 +88,12 @@ export default function MyPositions() {
         const won = market.status === 2 && market.winningSide === side;
         const canClaim = won && !claimed;
         const canRefund = market.status === 3 && !claimed;
+
+        // Fetch score for settled/locked markets
+        let score = null;
+        if (market.status === 2 || market.status === 1) {
+          score = await fetchScore(m.fixtureId);
+        }
 
         found.push({
           ...m,
@@ -95,10 +107,9 @@ export default function MyPositions() {
           canRefund,
           status: market.status,
           winningSide: market.winningSide,
+          score,
         });
-      } catch(e) {
-        // Position doesn't exist for this market
-      }
+      } catch(e) {}
     }
 
     setPositions(found);
@@ -127,8 +138,17 @@ export default function MyPositions() {
       )}
       {positions.map((p, i) => (
         <div key={i} className={"position-card " + (p.canClaim || p.canRefund ? "can-claim" : "")}>
-          <div className="position-match">{p.name}</div>
+
+          {/* Match header with score */}
+          <div className="position-match-header">
+            <span className="position-match">{p.name}</span>
+            {p.score && (
+              <span className="position-score">{p.score}</span>
+            )}
+          </div>
+
           <div className="position-question">{p.question}</div>
+
           <div className="position-details">
             <span className={"position-side " + SIDE[p.side].toLowerCase()}>
               {SIDE[p.side]}
@@ -161,13 +181,8 @@ export default function MyPositions() {
             </div>
           )}
 
-          {p.canClaim && (
-            <ClaimButton position={p} onClaimed={loadPositions} />
-          )}
-
-          {p.canRefund && (
-            <RefundButton position={p} onRefunded={loadPositions} />
-          )}
+          {p.canClaim && <ClaimButton position={p} onClaimed={loadPositions} />}
+          {p.canRefund && <RefundButton position={p} onRefunded={loadPositions} />}
 
           <a
             href={"https://explorer.solana.com/address/" + getMarketAddress(p.fixtureId) + "?cluster=devnet"}
@@ -194,10 +209,7 @@ function ClaimButton({ position, onClaimed }) {
     setError(null);
     try {
       const { claim } = await import("../lib/solana");
-      await claim(wallet, {
-        fixtureId: position.fixtureId,
-        winningSide: position.winningSide,
-      });
+      await claim(wallet, { fixtureId: position.fixtureId, winningSide: position.winningSide });
       onClaimed();
     } catch(e) {
       setError(e.message.slice(0, 80));
@@ -225,10 +237,7 @@ function RefundButton({ position, onRefunded }) {
     setRefunding(true);
     setError(null);
     try {
-      await refund(wallet, {
-        fixtureId: position.fixtureId,
-        side: position.side, // refund pulls from the vault the user paid into
-      });
+      await refund(wallet, { fixtureId: position.fixtureId, side: position.side });
       onRefunded();
     } catch(e) {
       if (e.message.includes("AlreadyRefunded") || e.message.includes("0x177e")) {
