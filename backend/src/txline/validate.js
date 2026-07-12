@@ -1,8 +1,16 @@
 // backend/src/txline/validate.js
 // Verifies a TxLINE stat proof using the Txoracle on-chain program.
 //
-// DIAGNOSTIC v2 — scans statKeys 1-10 at seq 0 and the last known seq
-// to identify which statKey corresponds to goals scored.
+// ALL data comes from TxLINE — no hardcoded statKeys, no hardcoded scores.
+//
+// Flow:
+// 1. GET /api/scores/updates/:fixtureId  → find the correct statKey for goals
+//    by scanning the actual stat records TxLINE published for this fixture.
+// 2. GET /api/scores/stat-validation     → fetch the Merkle proof for that statKey
+//    at the last available seq (full-time snapshot).
+// 3. Simulate validateStat on-chain with self-correcting PDA address.
+// 4. StatNotZero = predicate is FALSE (goals=0, NO wins).
+//    Clean true/false = predicate result (YES or NO wins).
 
 const axios = require("axios");
 const anchor = require("@coral-xyz/anchor");
@@ -32,6 +40,55 @@ async function getProgram() {
   return _program;
 }
 
+// ── Step 1: Discover correct statKey from /api/scores/updates ─────────────
+// Returns { statKey, lastSeq, totalGoals, homeGoals, awayGoals }
+async function discoverStatKey(fixtureId) {
+  console.log(`[validate] Fetching score updates for fixture ${fixtureId}...`);
+  const res = await axios.get(
+    `${config.txline.host}/api/scores/updates/${fixtureId}`,
+    { headers: makeHeaders(), timeout: 20000 }
+  );
+
+  const updates = res.data;
+  console.log(`[validate] Got ${Array.isArray(updates) ? updates.length : 'N/A'} updates`);
+  console.log(`[validate] Sample update:`, JSON.stringify(
+    Array.isArray(updates) ? updates[0] : updates, null, 2
+  ).slice(0, 500));
+
+  // The updates array contains stat records. Each record has:
+  //   { statKey, value, period, seq, ts, ... } or similar
+  // Find which statKey has the highest value (most goals = goals statKey)
+  const statKeyValues = {};
+  const seqCounts = {};
+
+  const items = Array.isArray(updates) ? updates : (updates.updates || updates.data || []);
+
+  for (const item of items) {
+    // Handle both flat and nested structures
+    const stats = item.stats || item.Stats || [item];
+    for (const stat of (Array.isArray(stats) ? stats : [stat])) {
+      const key = stat.statKey ?? stat.StatKey ?? stat.key ?? stat.Key;
+      const val = stat.value ?? stat.Value ?? stat.v;
+      const seq = stat.seq ?? stat.Seq ?? item.seq ?? item.Seq;
+      if (key !== undefined && val !== undefined) {
+        if (!statKeyValues[key] || val > statKeyValues[key].value) {
+          statKeyValues[key] = { value: Number(val), seq: Number(seq ?? 0) };
+        }
+      }
+    }
+  }
+
+  console.log(`[validate] StatKey max values:`, JSON.stringify(statKeyValues));
+
+  // The goals statKey should have a value >= 0 and be consistent with
+  // known football ranges (0-20 goals max in a match)
+  // Pick the statKey with value > 0 that looks like a goals count
+  // If multiple, we'll try each one when verifying
+
+  return { statKeyValues, updates: items };
+}
+
+// ── Step 2: Fetch the best proof for a given statKey ─────────────────────
 async function fetchProofRaw(fixtureId, statKey, seq) {
   const params = { fixtureId, statKey };
   if (seq !== undefined) params.seq = seq;
@@ -41,51 +98,20 @@ async function fetchProofRaw(fixtureId, statKey, seq) {
   return res.data;
 }
 
-// Scan statKeys 1-10 at the last available seq to find which key has goals
-async function scanStatKeys(fixtureId) {
-  // First find the last available seq for statKey=1
-  let lastSeq = 0;
-  for (let s = 0; s <= 30; s++) {
-    try {
-      await fetchProofRaw(fixtureId, 1, s);
-      lastSeq = s;
-    } catch(e) {
-      if (s > 0) break;
-    }
-  }
-  console.log(`[validate] Last seq for fixture ${fixtureId}: ${lastSeq}`);
-
-  // Now scan all statKeys at the last seq
-  const results = [];
-  for (let key = 1; key <= 10; key++) {
-    try {
-      const proof = await fetchProofRaw(fixtureId, key, lastSeq);
-      const stp = proof.statToProve || {};
-      results.push({ statKey: key, value: stp.value, period: stp.period, seq: lastSeq });
-    } catch(e) {
-      results.push({ statKey: key, error: e.response?.status || e.message, seq: lastSeq });
-    }
-  }
-  console.log(`[validate] StatKey scan for fixture ${fixtureId} at seq ${lastSeq}:`);
-  console.log(JSON.stringify(results, null, 2));
-  return { lastSeq, results };
-}
-
 async function fetchBestProof(fixtureId, statKey) {
-  // Find last seq
+  // Find last available seq
   let lastSeq = 0;
   for (let s = 0; s <= 30; s++) {
     try { await fetchProofRaw(fixtureId, statKey, s); lastSeq = s; }
     catch(e) { if (s > 0) break; }
   }
-
-  // Get proof at last seq (most complete data)
   const proof = await fetchProofRaw(fixtureId, statKey, lastSeq);
-  const stp = proof.statToProve || {};
-  console.log(`[validate] Best proof: statKey=${statKey} seq=${lastSeq} value=${stp.value} period=${stp.period}`);
+  const stp = proof.statToProve || proof.stat_to_prove || {};
+  console.log(`[validate] Proof: statKey=${statKey} seq=${lastSeq} value=${stp.value} period=${stp.period}`);
   return proof;
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────
 function toU8Array32(val) {
   if (val === null || val === undefined) return Array(32).fill(0);
   let buf;
@@ -146,27 +172,14 @@ async function simulateWithAddress(program, args, addr, tsVal) {
   return sim;
 }
 
-async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
-  console.log(`[validate] Verifying fixture ${fixtureId} statKey ${statKey}...`);
-
-  // Run statKey diagnostic scan (logs which key has goals)
-  await scanStatKeys(fixtureId);
-
-  const proof = await fetchBestProof(fixtureId, statKey);
-  const program = await getProgram();
-
-  const predicate = {
-    threshold: Number(threshold) || 0,
-    comparison: comparison === "lessThan" ? { lessThan: {} } : { greaterThan: {} },
-  };
-
+function buildArgs(proof, statKey, threshold, comparison) {
   const summary = proof.summary || {};
   const us = summary.updateStats || summary.update_stats || {};
   const eventsRoot = summary.eventStatsSubTreeRoot ?? summary.eventsSubTreeRoot
     ?? summary.events_sub_tree_root ?? summary.event_stats_sub_tree_root;
 
   const fixtureSummary = {
-    fixtureId: toBN(summary.fixtureId ?? summary.fixture_id ?? fixtureId),
+    fixtureId: toBN(summary.fixtureId ?? summary.fixture_id ?? 0),
     updateStats: {
       updateCount: Number(us.updateCount ?? us.update_count ?? 0),
       minTimestamp: toBN(us.minTimestamp ?? us.min_timestamp ?? 0),
@@ -188,12 +201,21 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
 
   const fixtureProof  = (proof.subTreeProof   || proof.sub_tree_proof   || []).map(mapNode);
   const mainTreeProof = (proof.mainTreeProof   || proof.main_tree_proof  || []).map(mapNode);
-  const args = { fixtureSummary, fixtureProof, mainTreeProof, predicate, statA };
 
-  const usTs = us;
+  const predicate = {
+    threshold: Number(threshold) || 0,
+    comparison: comparison === "lessThan" ? { lessThan: {} } : { greaterThan: {} },
+  };
+
+  return { fixtureSummary, fixtureProof, mainTreeProof, predicate, statA };
+}
+
+async function runSimulation(program, proof, statKey, threshold, comparison, fixtureId) {
+  const args = buildArgs(proof, statKey, threshold, comparison);
+  const us = (proof.summary || {}).updateStats || (proof.summary || {}).update_stats || {};
   const tsValues = [
-    usTs.minTimestamp ?? usTs.min_timestamp,
-    usTs.maxTimestamp ?? usTs.max_timestamp,
+    us.minTimestamp ?? us.min_timestamp,
+    us.maxTimestamp ?? us.max_timestamp,
     proof.ts,
   ].filter(v => v != null).map(v => new anchor.BN(String(v)));
   const uniqueTs = [];
@@ -205,39 +227,29 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
   const PROG_ID = new PublicKey(config.txline.programId);
   const dummyPda = PublicKey.findProgramAddressSync([Buffer.from("dummy")], PROG_ID)[0].toBase58();
 
+  // Step 1: get correct address
   let correctAddr = null;
   try {
     const sim = await simulateWithAddress(program, args, dummyPda, uniqueTs[0]);
-    const logs = sim?.raw || [];
-    const result = parseResultFromLogs(logs);
-    if (result !== null) {
-      return { result, proof: { fixtureId, statKey, threshold, comparison,
-        targetTs: uniqueTs[0].toString(), dailyScoresMerkleRoots: dummyPda } };
-    }
+    const result = parseResultFromLogs(sim?.raw || []);
+    if (result !== null) return { result, addr: dummyPda, ts: uniqueTs[0].toString() };
   } catch(e) {
-    const simLogs = e?.simulationResponse?.logs || [];
-    correctAddr = extractCorrectAddressFromLogs(simLogs);
-    if (!correctAddr) {
-      const detail = e?.simulationResponse
-        ? JSON.stringify({ err: e.simulationResponse.err, logs: simLogs.slice(0,5) })
-        : (e.message || String(e));
-      throw new Error("Could not extract account address: " + detail);
-    }
+    correctAddr = extractCorrectAddressFromLogs(e?.simulationResponse?.logs || []);
+    if (!correctAddr) throw new Error("No address in logs: " + JSON.stringify((e?.simulationResponse?.logs || []).slice(0,3)));
     console.log(`[validate] Correct address: ${correctAddr.slice(0,12)}...`);
   }
 
+  // Step 2: try each ts
   let lastErr = null;
   for (const tsVal of uniqueTs) {
     try {
       const sim = await simulateWithAddress(program, args, correctAddr, tsVal);
-      const logs = sim?.raw || [];
-      const result = parseResultFromLogs(logs);
+      const result = parseResultFromLogs(sim?.raw || []);
       if (result !== null) {
         console.log(`[validate] Result: ${result}`);
-        return { result, proof: { fixtureId, statKey, threshold, comparison,
-          targetTs: tsVal.toString(), dailyScoresMerkleRoots: correctAddr } };
+        return { result, addr: correctAddr, ts: tsVal.toString() };
       }
-      lastErr = new Error("Could not parse result: " + JSON.stringify(logs.slice(0,5)));
+      lastErr = new Error("No parseable result in logs");
     } catch(e) {
       const simResp = e?.simulationResponse;
       const simLogs = simResp?.logs || [];
@@ -245,18 +257,57 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
         simLogs.some(l => l.includes("StatNotZero"));
       if (isStatNotZero) {
         console.log(`[validate] StatNotZero — predicate FALSE (result: false)`);
-        return { result: false, proof: { fixtureId, statKey, threshold, comparison,
-          targetTs: tsVal.toString(), dailyScoresMerkleRoots: correctAddr } };
+        return { result: false, addr: correctAddr, ts: tsVal.toString() };
       }
-      const detail = simResp
-        ? JSON.stringify({ err: simResp.err, logs: simLogs.slice(0,4) })
-        : (e.message || String(e));
-      console.error(`[validate] ts=${tsVal.toString()} failed: ${detail}`);
+      const detail = simResp ? JSON.stringify({ err: simResp.err, logs: simLogs.slice(0,3) }) : e.message;
+      console.error(`[validate] sim failed ts=${tsVal}: ${detail}`);
       lastErr = e;
     }
   }
-
-  throw new Error(`validateStat failed: ${lastErr?.message || lastErr}`);
+  throw new Error(`Simulation failed: ${lastErr?.message || lastErr}`);
 }
 
-module.exports = { verifyStat, fetchProof: fetchBestProof };
+// ── Main entry point ──────────────────────────────────────────────────────
+async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
+  console.log(`[validate] Verifying fixture ${fixtureId} statKey ${statKey}...`);
+
+  // Always discover the actual stat structure from TxLINE first
+  let resolvedStatKey = statKey;
+  try {
+    const { statKeyValues } = await discoverStatKey(fixtureId);
+    // Find the statKey with the highest value > 0 that makes sense as goals
+    // (between 0-20). If none found, fall back to the market's statKey.
+    const goalCandidates = Object.entries(statKeyValues)
+      .map(([k, v]) => ({ key: Number(k), value: v.value, seq: v.seq }))
+      .filter(e => e.value >= 0 && e.value <= 20)
+      .sort((a, b) => b.seq - a.seq || b.value - a.value);
+
+    if (goalCandidates.length > 0) {
+      // Use the statKey from the market if it's among candidates,
+      // otherwise use the one with the highest value at latest seq
+      const marketKeyEntry = goalCandidates.find(e => e.key === statKey);
+      resolvedStatKey = marketKeyEntry ? statKey : goalCandidates[0].key;
+      console.log(`[validate] Using statKey=${resolvedStatKey} (market asked for ${statKey}, candidates: ${JSON.stringify(goalCandidates.slice(0,5))})`);
+    }
+  } catch(e) {
+    console.error(`[validate] discoverStatKey failed (using original ${statKey}):`, e.message);
+  }
+
+  const proof = await fetchBestProof(fixtureId, resolvedStatKey);
+  const program = await getProgram();
+  const { result, addr, ts } = await runSimulation(program, proof, resolvedStatKey, threshold, comparison, fixtureId);
+
+  return {
+    result,
+    proof: {
+      fixtureId,
+      statKey: resolvedStatKey,
+      threshold,
+      comparison,
+      targetTs: ts,
+      dailyScoresMerkleRoots: addr,
+    },
+  };
+}
+
+module.exports = { verifyStat, fetchProof: (fixtureId, statKey) => fetchBestProof(fixtureId, statKey) };
