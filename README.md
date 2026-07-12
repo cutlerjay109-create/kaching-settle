@@ -11,7 +11,7 @@
 [![Anchor](https://img.shields.io/badge/Anchor-0.30.1-blue)](https://www.anchor-lang.com/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-[Live App](https://kaching-settle-ten.vercel.app) · [Demo Video](#) · [Program on Solscan](https://solscan.io/account/9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B?cluster=devnet)
+[Live App](https://kaching-settle-ten.vercel.app) · [Program on Solscan](https://solscan.io/account/9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B?cluster=devnet)
 
 </div>
 
@@ -70,13 +70,13 @@ One sentence: *we built the part everyone else fakes.*
 └────────────────┘     └────────────────┘      └──────────────────┘
 ```
 
-**1 — Predict.** Connect Phantom, choose a real World Cup fixture (e.g. *"Will Norway score against England?"*), pick **YES** or **NO**, lock USDC. Minimum stake $1. One wallet, one side per market — a second deposit on the opposing side is rejected on-chain (`SideMismatch`).
+**1 — Predict.** Connect Phantom, choose a real World Cup fixture (e.g. *"Will France score against Spain?"*), pick **YES** or **NO**, lock USDC. Minimum stake $1. One wallet, one side per market — a second deposit on the opposing side is rejected on-chain (`SideMismatch`).
 
 **2 — Kickoff seals the vault.** The Solana program compares the on-chain clock to the fixture's kickoff timestamp. The instant kickoff passes, every deposit attempt is rejected at the program level — `KickoffPassed`. No server involved.
 
 **3 — Watch live.** Scores, goals, cards, and stoppage time stream in real time from TxLINE's SSE feed. The scoreboard shows correct period labels (1st Half → 45+2' → HT → 2nd Half → 90+3' → FT). An AI pundit (Groq) generates broadcast-style commentary, voiced by ElevenLabs.
 
-**4 — The proof settles it.** When the fixture completes, our keeper detects it via three independent methods, fetches TxLINE's Merkle proof, and verifies it against TxLINE's on-chain `daily_scores_roots` via `validateStat()`. The verified boolean — not an admin — determines the winning side, recorded on-chain by `settle()`.
+**4 — The proof settles it.** When the fixture completes, our keeper detects it via three independent methods, fetches TxLINE's Merkle proof at the final sequence, and verifies it against TxLINE's on-chain `daily_scores_merkle_roots` PDA via `validateStat()`. The verified boolean — not an admin — determines the winning side, recorded on-chain by `settle()`.
 
 **5 — Winners claim.** Each winner clicks **Claim** once from the market view or the **My Positions** tab. The program computes their proportional share and transfers USDC straight to their wallet, with a Solscan receipt proving exactly why.
 
@@ -155,16 +155,29 @@ Check on-chain vault balances
         └─ Both sides funded ──►
                 │
                 ▼
-GET /api/scores/stat-validation?fixtureId=…&statKey=1
+Find last available proof sequence (search up to seq=300)
+A 90-minute match generates ~300 sequences (~27s each).
+Final score only available at the last sequence.
+        │
+        ▼
+GET /api/scores/stat-validation?fixtureId=…&statKey=1&seq=<last>
         │  returns: summary, subTreeProof, mainTreeProof,
-        │           statToProve, eventStatRoot, statProof
+        │           statToProve { key, value, period },
+        │           eventStatRoot, statProof
         ▼
 txoracle.validateStat(targetTs, fixtureSummary, fixtureProof,
-                      mainTreeProof, predicate, stat1).view()
+                      mainTreeProof, predicate, statA).simulate()
         │  verified against TxLINE's on-chain
-        │  ["daily_scores_roots", epochDay] PDA
+        │  ["daily_scores_merkle_roots", epochDay] PDA
+        │  Result read from transaction logs:
+        │  "Evaluate predicate to: true/false"
         ▼
    true / false  ←  cryptographically proven, reproducible by anyone
+        │
+        ├─ false + StatNotZero error (6074) = predicate evaluated FALSE
+        │   (stat proved to be 0, goals > 0 fails) → NO wins
+        │
+        └─ true = predicate evaluated TRUE → YES wins
         │
         ▼
 program.settle(winning_side)   → market status = SETTLED on-chain
@@ -190,7 +203,7 @@ Solscan receipt — independently verifiable settlement trail
 | 6 | `GET /api/scores/snapshot/:fixtureId` | Point-in-time score state |
 | 7 | `GET /api/scores/updates/:fixtureId` | Historical score updates |
 | 8 | `GET /api/scores/stat-validation` | **Merkle proof package for on-chain verification** |
-| 9 | Txoracle `validateStat().view()` | **On-chain proof check vs `daily_scores_roots` PDA** |
+| 9 | Txoracle `validateStat().simulate()` | **On-chain proof check via simulation — result read from transaction logs** |
 
 Every data call carries both required headers: `Authorization: Bearer <jwt>` and `X-Api-Token: <apiToken>`.
 
@@ -199,7 +212,9 @@ Every data call carries both required headers: `Authorization: Bearer <jwt>` and
 - `Clock.Seconds / 60` = match minute
 - `Stats["1"]` = home goals, `Stats["2"]` = away goals
 - `Action` field = match events (`goal`, `shot`, `corner`, `possible`, etc.)
-- `statKey 1` = home goals for `validateStat`
+- `statKey=1` = Participant1 goals (confirmed from live match data at seq=300)
+- `statKey=7` = Participant2 goals (confirmed from live match data at seq=300)
+- Proof sequences go up to ~300 per match — always fetch the last seq for full-time data
 
 ---
 
@@ -272,42 +287,17 @@ node scripts/decode-market.js <base64data>
 
 ### France vs Morocco — Settled market
 
-**Raw account data (base64):**
-```
-277VNwDjxpqd2RUBAAAAACkAAABXaWxsIEZyYW5jZSBzY29yZSBhIGdvYWwgYWdhaW5zdCBNb3JvY2NvP8D9T2oAAAAAAQAAAAAAAAAAAAAAAICEHgAAAAAAAAAAAAAAAAACAPWqxL7mgmc5Iywc6c68HNbFpEQYNMdD0j3Xl+u79x11///9AAAA...
-```
-
 **Decoded:**
 ```
 Fixture ID:    18209181
 Question:      Will France score a goal against Morocco?
 Kickoff:       2026-07-09 20:00:00 UTC
-Stat Key:      1 (home goals)
+Stat Key:      1 (Participant1 goals)
 Comparison:    greaterThan
 YES Total:     $2.00 USDC
 NO Total:      $0.00 USDC
 Status:        SETTLED ✅
 Winning Side:  YES — France scored
-```
-
-### Norway vs England — Open market (pre-match)
-
-**Raw account data (base64):**
-```
-277VNwDjxppb7BUBAAAAACkAAABXaWxsIE5vcndheSBzY29yZSBhIGdvYWwgYWdhaW5zdCBFbmdsYW5kP9CuUmoAAAAAAQAAAAAAAAAAAAAAAICEHgAAAAAAwMYtAAAAAAAA//Wq...
-```
-
-**Decoded:**
-```
-Fixture ID:    18213979
-Question:      Will Norway score a goal against England?
-Kickoff:       2026-07-11 21:00:00 UTC
-Stat Key:      1 (home goals)
-Comparison:    greaterThan
-YES Total:     $2.00 USDC  →  2.50x if right
-NO Total:      $3.00 USDC  →  1.67x if right
-Status:        OPEN — accepting deposits
-Winning Side:  Not yet settled
 ```
 
 ### What changes at settlement
@@ -347,7 +337,7 @@ The pool ratio *is* the odds. Nobody sets them, nobody can skew them, and the sm
 | Smart contract | Rust · Anchor 0.30.1 · Solana devnet |
 | Oracle / data | **TxLINE by TxODDS** — SSE stream + Merkle score proofs |
 | Backend | Node.js · Express · Socket.IO · @solana/web3.js |
-| AI commentary | Groq (`llama3-8b`) text · ElevenLabs TTS voice |
+| AI commentary | Groq (`llama-3.1-8b-instant`) text · ElevenLabs TTS voice |
 | Frontend | React 18 · Vite · Phantom Wallet Adapter |
 | Settlement asset | USDC (SPL token) |
 | Hosting | Railway (backend) · Vercel (frontend) |
@@ -383,11 +373,14 @@ npm run dev                 # open http://localhost:5173
 ### Environment variables (`backend/.env`)
 
 ```ini
-WALLET_KEYPAIR=      # base58 private key — keeper wallet (devnet SOL required)
-GROQ_API_KEY=        # console.groq.com
-ELEVENLABS_API_KEY=  # elevenlabs.io
-ELEVENLABS_VOICE_ID= # your chosen voice
-TXLINE_API_TOKEN=    # produced by: node scripts/subscribe.js (free tier)
+WALLET_KEYPAIR=       # base58 private key — keeper wallet (devnet SOL required)
+AUTHORITY_KEYPAIRS=   # optional: comma-separated base58 keys for markets created
+                      # by other wallets (e.g. Phantom). Keeper picks the right
+                      # key per market automatically.
+GROQ_API_KEY=         # console.groq.com
+ELEVENLABS_API_KEY=   # elevenlabs.io
+ELEVENLABS_VOICE_ID=  # your chosen voice
+TXLINE_API_TOKEN=     # produced by: node scripts/subscribe.js (free tier)
 ```
 
 ### Scripts
@@ -395,10 +388,9 @@ TXLINE_API_TOKEN=    # produced by: node scripts/subscribe.js (free tier)
 | Script | Purpose |
 |---|---|
 | `scripts/subscribe.js` | One-time TxLINE on-chain subscription + token activation |
-| `scripts/spike.js` | Connectivity check: auth, fixtures, proofs |
 | `scripts/deposit.js` | Terminal deposit onto one side of a market |
 | `scripts/create-market.js` | Manual market creation (auto-market normally handles this) |
-| `scripts/manual-settle.js` | Manual settlement for completed fixtures |
+| `scripts/manual-settle.js` | Emergency manual settlement for completed fixtures |
 | `scripts/decode-market.js` | Decode raw on-chain market account data by fixture ID or base64 |
 | `scripts/extend-program.js` | Extend program account size before redeployment |
 | `scripts/seed-all-markets.js` | Seed markets manually — **requires two separate wallets** due to on-chain `SideMismatch` protection |
@@ -420,15 +412,15 @@ kaching-settle/
 │   ├── txline/                        # auth · stream · fixtures · normalize · validate
 │   ├── keeper/                        # auto-market · settle-trigger
 │   ├── ai/                            # pundit (Groq) · voice (ElevenLabs)
-│   ├── program/                       # Solana clients
+│   ├── program/                       # Solana client
 │   └── server.js                      # Express + Socket.IO entry
 ├── frontend/src/
 │   ├── pages/                         # MarketList · MarketView · MyPositions
 │   ├── components/                    # DepositBox · PotMeter · LiveFeed · Receipt · VoicePlayer · WalletButton
 │   └── lib/                           # solana.js (raw web3, no IDL parsing) · socket.js · idl.json
 ├── shared/                            # single source of config + constants
-├── scripts/                           # subscribe · spike · deposit · settle · decode · extend
-└── docs/                              # ENDPOINTS · ARCHITECTURE · FEEDBACK · DEMO_SCRIPT
+├── scripts/                           # subscribe · deposit · settle · decode · extend · seed
+└── docs/                              # ENDPOINTS · ARCHITECTURE · FEEDBACK
 ```
 
 ---
@@ -444,12 +436,21 @@ kaching-settle/
 
 **Where we hit friction**
 
-1. **`validateStat` is `.view()`-only.** We initially designed for an atomic CPI (verify + release in one transaction) per the track description's wording, then discovered verification is a read-only simulation. Clearer docs on the keeper-attested pattern would save teams a redesign.
-2. **Devnet fixtures ≠ mainnet fixtures.** Devnet carries friendlies only; World Cup data is mainnet-side. We ended up with a split topology (mainnet TxLINE host + devnet Solana program) that the docs don't explicitly bless.
-3. **Activation message format** (`txSig:leagues:jwt`, base64 signature) took trial and error — one concrete worked example in the quickstart would remove all guesswork.
-4. **Soccer `statKey` codes are undocumented.** We inferred `1 = home goals` from NCAA examples. A stat-key table per sport would be a five-minute doc fix that saves hours.
-5. **Token-2022 gotcha:** the TxL mint uses Token-2022, so ATA derivation with the classic token program fails silently in subscribe. Worth a call-out box in the docs.
-6. **`GameState` is always `"scheduled"` even during live play.** Real match phase must be derived from `StatusId` (2=1H, 3=HT, 4=2H, 5=FT) — not the misleading `GameState` field.
+1. **`validateStat` does not support `.view()`.** Calling `.view()` throws "Method does not support views". The correct approach is `.simulate()` followed by parsing `"Evaluate predicate to: true/false"` from the transaction logs. The keeper-attested pattern works well once understood — a note in the docs would save teams hours of debugging.
+
+2. **`dailyScoresMerkleRoots` PDA cannot be derived off-chain.** The program derives this account from an opaque seed we could not reproduce. Our solution: pass a dummy PDA to intentionally trigger a `ConstraintSeeds` error, then extract the correct address from the program's own error logs (`"Right: <address>"`). This self-correcting approach works reliably but a simple helper function or documented seed would be cleaner.
+
+3. **Proof sequences go up to 300+.** A 90-minute match generates approximately 300 proof sequences (~27 seconds each). Fetching `seq=1` returns early-match data where the score is still 0-0. Always fetch the last available sequence for full-time results. This cost us two incorrect settlements before we discovered it.
+
+4. **Devnet fixtures ≠ mainnet fixtures.** Devnet carries friendlies only; World Cup data is mainnet-side. We ended up with a split topology (mainnet TxLINE host + devnet Solana program) that the docs don't explicitly bless.
+
+5. **Activation message format** (`txSig:leagues:jwt`, base64 signature) took trial and error — one concrete worked example in the quickstart would remove all guesswork.
+
+6. **Soccer `statKey` codes are undocumented.** We confirmed from live match data: `statKey=1` = Participant1 goals, `statKey=7` = Participant2 goals. A stat-key table per sport would be a five-minute doc fix that saves hours.
+
+7. **Token-2022 gotcha:** the TxL mint uses Token-2022, so ATA derivation with the classic token program fails silently in subscribe. Worth a call-out box in the docs.
+
+8. **`GameState` is always `"scheduled"` even during live play.** Real match phase must be derived from `StatusId` (2=1H, 3=HT, 4=2H, 5=FT) — not the misleading `GameState` field.
 
 ---
 
@@ -467,7 +468,7 @@ kaching-settle/
 | Funds permanently stuck | 7-day market expiry — `void_market` releases all funds after deadline |
 | One-sided market stuck | `void_market` triggered automatically if either vault is $0 at match end |
 
-**Known limitation (disclosed):** settlement is *keeper-attested* — the keeper triggers `settle` after off-chain `validateStat` verification, because TxLINE's validator is view-only. The proof trail remains fully verifiable by third parties; a future version will re-implement Merkle verification in-program for atomic settlement.
+**Known limitation (disclosed):** settlement is *keeper-attested* — the keeper triggers `settle` after off-chain `validateStat` simulation, because TxLINE's validator does not support view calls. The proof trail remains fully verifiable by third parties; a future version will re-implement Merkle verification in-program for atomic settlement.
 
 **Known limitation (disclosed):** upgrade authority on the program has not been revoked. In production this would be burned to make the program fully immutable.
 
@@ -489,6 +490,7 @@ Most hackathon prediction apps are a scoreboard with a database deciding payouts
 8. **The underdog engine** — pool-ratio odds that reward the brave call automatically, displayed live.
 9. **Permanent betting history** — My Positions reads directly from Solana, showing every bet ever placed regardless of whether the fixture still appears in the TxLINE feed.
 10. **Raw on-chain verifiability** — every market's state is readable as raw bytes. Anyone can decode it with `scripts/decode-market.js`, no API required.
+11. **Multi-authority keeper** — markets created by any wallet settle automatically. Add any signing key via `AUTHORITY_KEYPAIRS` and the keeper picks the right one per market.
 
 *The proof pays you. That's the whole product.*
 
