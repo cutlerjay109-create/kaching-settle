@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { Connection, PublicKey } from "@solana/web3.js";
-import { getMarketPda } from "../lib/solana";
+import { getMarketPda, refund } from "../lib/solana";
 import WalletButton from "../components/WalletButton";
 
-// Known markets — add to this list as new fixtures are created
-// In production this would be stored in a database
+const BACKEND = "https://kaching-settle-production.up.railway.app";
+
+// Fallback list — only used if the backend market list can't be fetched.
 const KNOWN_MARKETS = [
   { fixtureId: 18209181, name: "France vs Morocco", question: "Will France score a goal against Morocco?" },
   { fixtureId: 18218149, name: "Spain vs Belgium", question: "Will Spain score a goal against Belgium?" },
@@ -18,6 +18,31 @@ const KNOWN_MARKETS = [
 
 const STATUS = { 0: "Open", 1: "Locked", 2: "Settled", 3: "Voided" };
 const SIDE = { 0: "YES", 1: "NO" };
+
+// Merge the backend's live market list with the hardcoded fallback,
+// deduped by fixtureId.
+async function loadMarketList() {
+  const byId = new Map();
+  for (const m of KNOWN_MARKETS) byId.set(m.fixtureId, m);
+
+  try {
+    const res = await fetch(`${BACKEND}/api/markets`);
+    const list = await res.json();
+    if (Array.isArray(list)) {
+      for (const m of list) {
+        if (!m.fixtureId) continue;
+        byId.set(m.fixtureId, {
+          fixtureId: m.fixtureId,
+          name: m.home && m.away ? `${m.home} vs ${m.away}` : (m.question || `Fixture ${m.fixtureId}`),
+          question: m.question || "",
+        });
+      }
+    }
+  } catch (e) {
+    // backend unreachable — fallback list still works
+  }
+  return Array.from(byId.values());
+}
 
 export default function MyPositions() {
   const { publicKey, connected } = useWallet();
@@ -33,9 +58,10 @@ export default function MyPositions() {
     setLoading(true);
     const { getMarket, getPositionPda, getConnection } = await import("../lib/solana");
     const connection = getConnection();
+    const markets = await loadMarketList();
     const found = [];
 
-    for (const m of KNOWN_MARKETS) {
+    for (const m of markets) {
       try {
         // Check if market exists and get its state
         const market = await getMarket(m.fixtureId);
@@ -55,15 +81,18 @@ export default function MyPositions() {
 
         const won = market.status === 2 && market.winningSide === side;
         const canClaim = won && !claimed;
+        const canRefund = market.status === 3 && !claimed;
 
         found.push({
           ...m,
+          question: m.question || market.question,
           market,
           side,
           amount,
           claimed,
           won,
           canClaim,
+          canRefund,
           status: market.status,
           winningSide: market.winningSide,
         });
@@ -97,7 +126,7 @@ export default function MyPositions() {
         <p className="empty">No positions found for this wallet.</p>
       )}
       {positions.map((p, i) => (
-        <div key={i} className={"position-card " + (p.canClaim ? "can-claim" : "")}>
+        <div key={i} className={"position-card " + (p.canClaim || p.canRefund ? "can-claim" : "")}>
           <div className="position-match">{p.name}</div>
           <div className="position-question">{p.question}</div>
           <div className="position-details">
@@ -122,8 +151,22 @@ export default function MyPositions() {
             </div>
           )}
 
+          {p.status === 3 && (
+            <div className="position-result">
+              {p.claimed ? (
+                <span className="result-claimed">↩️ Refunded</span>
+              ) : (
+                <span className="result-win">↩️ Market voided — your stake is refundable</span>
+              )}
+            </div>
+          )}
+
           {p.canClaim && (
             <ClaimButton position={p} onClaimed={loadPositions} />
+          )}
+
+          {p.canRefund && (
+            <RefundButton position={p} onRefunded={loadPositions} />
           )}
 
           <a
@@ -167,6 +210,43 @@ function ClaimButton({ position, onClaimed }) {
     <div>
       <button className="deposit-btn" onClick={handleClaim} disabled={claiming}>
         {claiming ? "Claiming..." : "Claim Winnings"}
+      </button>
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+function RefundButton({ position, onRefunded }) {
+  const wallet = useWallet();
+  const [refunding, setRefunding] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleRefund() {
+    setRefunding(true);
+    setError(null);
+    try {
+      await refund(wallet, {
+        fixtureId: position.fixtureId,
+        side: position.side, // refund pulls from the vault the user paid into
+      });
+      onRefunded();
+    } catch(e) {
+      if (e.message.includes("AlreadyRefunded") || e.message.includes("0x177e")) {
+        setError("Already refunded.");
+      } else if (e.message.includes("MarketNotVoid") || e.message.includes("0x177d")) {
+        setError("Market is not voided — refunds not available.");
+      } else {
+        setError(e.message.slice(0, 80));
+      }
+    } finally {
+      setRefunding(false);
+    }
+  }
+
+  return (
+    <div>
+      <button className="deposit-btn" onClick={handleRefund} disabled={refunding}>
+        {refunding ? "Refunding..." : "Get Refund"}
       </button>
       {error && <p className="error">{error}</p>}
     </div>

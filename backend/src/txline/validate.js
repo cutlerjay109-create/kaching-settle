@@ -1,11 +1,15 @@
 // backend/src/txline/validate.js
 // Fetches TxLINE's cryptographic stat-validation proof for a fixture.
 // Calls validateStat().view() on the Txoracle program — returns true/false.
-// This is the trustless verification step that gates settlement.
+//
+// Fix: the daily scores root PDA is now derived from the PROOF's target
+// timestamp, not from "today". Previously, any settlement retried after
+// midnight UTC pointed at the wrong day's root and failed forever.
+// (Falls back to today's root if the proof-day root account is missing.)
 
 const axios = require("axios");
 const anchor = require("@coral-xyz/anchor");
-const { Connection, PublicKey, ComputeBudgetProgram, Transaction } = require("@solana/web3.js");
+const { Connection, PublicKey } = require("@solana/web3.js");
 const { makeHeaders } = require("./auth");
 const config = require("../../shared/config");
 const constants = require("../../shared/constants");
@@ -57,6 +61,26 @@ function toBytes32(val) {
   return Buffer.from(val);
 }
 
+function dailyScoresRootPda(epochDay) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("daily_scores_roots"), Buffer.from([epochDay & 0xff, (epochDay >> 8) & 0xff])],
+    new PublicKey(config.txline.programId)
+  )[0];
+}
+
+// Epoch days to try, in order: the proof's day first, then today.
+function candidateEpochDays(targetTs) {
+  const days = [];
+  if (targetTs) {
+    // targetTs may arrive in ms or seconds — normalize to ms
+    const tsMs = targetTs > 1e12 ? targetTs : targetTs * 1000;
+    days.push(Math.floor(tsMs / constants.MS_PER_DAY));
+  }
+  const today = Math.floor(Date.now() / constants.MS_PER_DAY);
+  if (!days.includes(today)) days.push(today);
+  return days;
+}
+
 // Main: verify a stat on-chain using TxLINE's Merkle proof
 // Returns { result: bool, proof: object } — proof is stored as receipt
 async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
@@ -106,44 +130,45 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
     isRightSibling: node.isRightSibling,
   }));
 
-  // The daily scores root PDA
-  const epochDay = Math.floor(Date.now() / constants.MS_PER_DAY);
-  const [dailyScoresRoot] = PublicKey.findProgramAddressSync(
-    [Buffer.from("daily_scores_roots"), Buffer.from([epochDay & 0xff, (epochDay >> 8) & 0xff])],
-    new PublicKey(config.txline.programId)
-  );
+  let lastError = null;
 
-  try {
-    // .view() — read-only simulation, returns true/false
-    const result = await program.methods
-      .validateStat(
-        new anchor.BN(proof.targetTs),
-        fixtureSummary,
-        fixtureProof,
-        mainTreeProof,
-        predicate,
-        stat1,
-        null, // stat2 — not needed for single-stat markets
-        null  // op
-      )
-      .accounts({ dailyScoresRoot })
-      .view({ commitment: "confirmed" });
+  for (const epochDay of candidateEpochDays(proof.targetTs)) {
+    const dailyScoresRoot = dailyScoresRootPda(epochDay);
+    try {
+      // .view() — read-only simulation, returns true/false
+      const result = await program.methods
+        .validateStat(
+          new anchor.BN(proof.targetTs),
+          fixtureSummary,
+          fixtureProof,
+          mainTreeProof,
+          predicate,
+          stat1,
+          null, // stat2 — not needed for single-stat markets
+          null  // op
+        )
+        .accounts({ dailyScoresRoot })
+        .view({ commitment: "confirmed" });
 
-    console.log(`[validate] Result: ${result}`);
-    return {
-      result,
-      proof: {
-        fixtureId,
-        statKey,
-        threshold,
-        comparison,
-        targetTs: proof.targetTs,
-        dailyScoresRoot: dailyScoresRoot.toBase58(),
-      },
-    };
-  } catch (e) {
-    throw new Error(`validateStat failed: ${e.message}`);
+      console.log(`[validate] Result: ${result} (epochDay ${epochDay})`);
+      return {
+        result,
+        proof: {
+          fixtureId,
+          statKey,
+          threshold,
+          comparison,
+          targetTs: proof.targetTs,
+          dailyScoresRoot: dailyScoresRoot.toBase58(),
+        },
+      };
+    } catch (e) {
+      lastError = e;
+      console.error(`[validate] validateStat failed for epochDay ${epochDay}: ${e.message}`);
+    }
   }
+
+  throw new Error(`validateStat failed: ${lastError ? lastError.message : "unknown"}`);
 }
 
 module.exports = { verifyStat, fetchProof };

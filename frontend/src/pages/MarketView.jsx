@@ -11,25 +11,45 @@ import { getMarket } from "../lib/solana";
 
 const BACKEND = "https://kaching-settle-production.up.railway.app";
 
+// Build a display fixture from the on-chain question when TxLINE has
+// removed the fixture from its feed (happens right after full time).
+function fixtureFromMarket(fixtureId, market) {
+  let home = "Home", away = "Away";
+  const m = (market.question || "").match(/^Will (.+) score a goal against (.+)\?$/);
+  if (m) { home = m[1]; away = m[2]; }
+  return {
+    fixtureId,
+    home,
+    away,
+    competition: "",
+    kickoffMs: market.kickoffTs * 1000,
+  };
+}
+
 export default function MarketView({ fixtureId, onBack }) {
   const { connected } = useWallet();
   const [fixture, setFixture] = useState(null);
+  const [notFound, setNotFound] = useState(false);
   const [score, setScore] = useState(null);
   const [events, setEvents] = useState([]);
   const [yesPot, setYesPot] = useState(0);
   const [noPot, setNoPot] = useState(0);
   const [settlement, setSettlement] = useState(null);
+  const [livePundit, setLivePundit] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
 
   useEffect(() => {
+    let punditTimer = null;
+
     fetch(`${BACKEND}/api/fixtures`)
       .then(r => r.json())
       .then(data => {
         const f = data.find(x => x.fixtureId === fixtureId);
-        setFixture(f || null);
-      });
+        if (f) setFixture(f);
+      })
+      .catch(() => {});
 
-    // Fetch last known score from TxLINE on page load
+    // Fetch last known score on page load
     fetch(`${BACKEND}/api/scores/snapshot/${fixtureId}`)
       .then(r => r.json())
       .then(data => {
@@ -45,11 +65,16 @@ export default function MarketView({ fixtureId, onBack }) {
         }
       }).catch(() => {});
 
-    // Load on-chain market state — works even after page refresh
+    // Load on-chain market state — works even after page refresh,
+    // AND provides team names when TxLINE has dropped the fixture.
     getMarket(fixtureId).then(market => {
-      if (!market) return;
+      if (!market) { setNotFound(true); return; }
+
       setYesPot(market.yesTotal);
       setNoPot(market.noTotal);
+
+      // TxLINE removes finished fixtures — fall back to on-chain data
+      setFixture(prev => prev || fixtureFromMarket(fixtureId, market));
 
       // If already settled — show settlement screen immediately
       if (market.status === 2) {
@@ -96,17 +121,16 @@ export default function MarketView({ fixtureId, onBack }) {
       }
     });
 
+    // Live pundit commentary is its own state — it must never overwrite
+    // or corrupt the settlement object.
     socket.on("pundit", (data) => {
-      if (data.text) {
-        setSettlement(prev => ({
-          ...prev,
-          liveCommentary: data.text,
-          audioUrl: data.audioUrl,
-          isLive: true,
-        }));
-        setTimeout(() => setSettlement(prev => prev && prev.isLive ? null : prev), 15000);
-      }
+      if (data.fixtureId && data.fixtureId !== fixtureId) return;
+      if (!data.text) return;
+      setLivePundit({ text: data.text, audioUrl: data.audioUrl });
+      if (punditTimer) clearTimeout(punditTimer);
+      punditTimer = setTimeout(() => setLivePundit(null), 15000);
     });
+
     socket.on("settlement", (s) => {
       if (s.fixtureId === fixtureId) {
         setSettlement(s);
@@ -114,10 +138,22 @@ export default function MarketView({ fixtureId, onBack }) {
       }
     });
 
-    return () => socket.disconnect();
+    return () => {
+      if (punditTimer) clearTimeout(punditTimer);
+      socket.disconnect();
+    };
   }, [fixtureId]);
 
-  if (!fixture) return <div className="loading">Loading market...</div>;
+  if (!fixture) {
+    return (
+      <div className="market-view">
+        <button className="back-btn" onClick={onBack}>← Back</button>
+        <div className="loading">
+          {notFound ? "Market not found for this fixture." : "Loading market..."}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="market-view">
@@ -125,15 +161,22 @@ export default function MarketView({ fixtureId, onBack }) {
 
       <div className="match-header">
         <h2>{fixture.home} vs {fixture.away}</h2>
-        <p className="competition">{fixture.competition}</p>
+        {fixture.competition && <p className="competition">{fixture.competition}</p>}
         <p className="kickoff">{new Date(fixture.kickoffMs).toLocaleString()}</p>
       </div>
 
       <LiveFeed score={score} events={events} fixture={fixture} />
 
+      {livePundit && !settlement && (
+        <VoicePlayer audioUrl={livePundit.audioUrl} commentary={livePundit.text} />
+      )}
+
       {settlement ? (
         <>
-          <VoicePlayer audioUrl={audioUrl} commentary={settlement.commentary} />
+          <VoicePlayer
+            audioUrl={audioUrl}
+            commentary={settlement.commentary}
+          />
           <Receipt settlement={settlement} />
         </>
       ) : (

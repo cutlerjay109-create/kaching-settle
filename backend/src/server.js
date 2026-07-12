@@ -29,6 +29,11 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
 app.use(express.json());
 
+// Map our normalized period back to TxLINE StatusId
+// period: 0 pre, 1 1H, 3 HT, 2 2H, 5 FT
+// StatusId: 1 pre, 2 1H, 3 HT, 4 2H, 5 FT
+const PERIOD_TO_STATUS = { 0: 1, 1: 2, 3: 3, 2: 4, 5: 5 };
+
 // ── Routes ─────────────────────────────────────────────
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 
@@ -45,7 +50,22 @@ app.get("/api/scores/snapshot/:fixtureId", async (req, res) => {
   try {
     const fixtureId = parseInt(req.params.fixtureId);
 
-    // First try TxLINE live snapshot
+    // Prefer OUR score store first — it's built from the same SSE feed but
+    // with sticky phase/score fixes applied, and it survives TxLINE clearing
+    // finished matches.
+    const stored = getLastScore(fixtureId);
+    if (stored) {
+      return res.json([{
+        FixtureId: fixtureId,
+        Participant1Goals: stored.homeGoals,
+        Participant2Goals: stored.awayGoals,
+        StatusId: PERIOD_TO_STATUS[stored.period] ?? 1,
+        Clock: { Seconds: stored.minute * 60 },
+        Stats: { "1": stored.homeGoals, "2": stored.awayGoals }
+      }]);
+    }
+
+    // Nothing stored (e.g. backend restarted) — try TxLINE snapshot
     const axios = require("axios");
     const { makeHeaders } = require("./txline/auth");
     const config = require("../../shared/config");
@@ -59,21 +79,7 @@ app.get("/api/scores/snapshot/:fixtureId", async (req, res) => {
         return res.json(r.data);
       }
     } catch(e) {
-      // TxLINE snapshot failed or empty — fall through to score store
-    }
-
-    // Fall back to our own score store
-    const stored = getLastScore(fixtureId);
-    if (stored) {
-      console.log("[server] Serving stored score for fixture", fixtureId);
-      return res.json([{
-        FixtureId: fixtureId,
-        Participant1Goals: stored.homeGoals,
-        Participant2Goals: stored.awayGoals,
-        StatusId: stored.period === 5 ? 5 : stored.period === 3 ? 3 : stored.period === 2 ? 4 : 2,
-        Clock: { Seconds: stored.minute * 60 },
-        Stats: { "1": stored.homeGoals, "2": stored.awayGoals }
-      }]);
+      // TxLINE snapshot failed or empty
     }
 
     res.json([]);
@@ -86,6 +92,16 @@ app.get("/api/fixtures/upcoming", async (req, res) => {
   try {
     const fixtures = await getUpcoming();
     res.json(fixtures);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// All markets the keeper is (or was) watching — used by My Positions
+// so the frontend never depends on a hardcoded list.
+app.get("/api/markets", (req, res) => {
+  try {
+    res.json(keeper.getWatchedMarkets());
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -172,6 +188,8 @@ async function start() {
         comparison: "greaterThan",
         status: "active",
         kickoffMs: fixture.kickoffMs,
+        home: fixture.home,
+        away: fixture.away,
       });
     });
 
@@ -180,7 +198,9 @@ async function start() {
     // Auto-seeding disabled — SideMismatch prevents keeper from holding both sides
     // await autoSeedMarkets();
 
-    // Register ALL fixtures with keeper so past-kickoff detection works
+    // Register ALL fixtures with keeper so past-kickoff detection works.
+    // (The keeper ALSO recovers unsettled markets straight from the chain at
+    // start(), which covers fixtures TxLINE has already removed.)
     const allFixtures = await fetchFixtures();
     for (const fixture of allFixtures) {
       keeper.registerMarket({
@@ -192,6 +212,8 @@ async function start() {
         comparison: "greaterThan",
         status: "active",
         kickoffMs: fixture.kickoffMs,
+        home: fixture.home,
+        away: fixture.away,
       });
     }
     console.log("[server] Registered", allFixtures.length, "fixtures with keeper");

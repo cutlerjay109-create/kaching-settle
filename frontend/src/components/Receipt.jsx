@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { claim, refund } from "../lib/solana";
+import { claim, refund, getPosition } from "../lib/solana";
 
 export default function Receipt({ settlement }) {
   if (!settlement) return null;
@@ -21,9 +21,17 @@ export default function Receipt({ settlement }) {
     setError(null);
     try {
       if (settlement.voided) {
-        // Refund — need to know which side user was on
-        // For now show message to contact support
-        setError("Market voided — refund coming in v2");
+        // Refund — look up which side the user was on, then pull
+        // their stake back from that side's vault.
+        const pos = await getPosition(settlement.fixtureId, publicKey);
+        if (!pos) { setError("No position found for this wallet."); return; }
+        if (pos.claimed) { setError("Already refunded."); return; }
+        const { tx } = await refund(wallet, {
+          fixtureId: settlement.fixtureId,
+          side: pos.side,
+        });
+        setClaimTx(tx);
+        setClaimed(true);
         return;
       }
       const winningSide = settlement.winningSide === "YES" ? 0 : 1;
@@ -80,7 +88,7 @@ export default function Receipt({ settlement }) {
 
       {claimed && claimTx ? (
         <div className="claim-success">
-          <p>✅ Claimed successfully!</p>
+          <p>✅ {settlement.voided ? "Refunded successfully!" : "Claimed successfully!"}</p>
           <a
             href={`https://explorer.solana.com/tx/${claimTx}?cluster=devnet`}
             target="_blank"

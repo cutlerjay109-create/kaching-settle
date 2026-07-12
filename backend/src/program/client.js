@@ -1,18 +1,15 @@
 // backend/src/program/client.js
 // Connects to OUR vault program on Solana.
-// Handles deposit, lock, settle, and claim instructions.
-// Program ID set in shared/config.js after deploy.
+//
+// CRITICAL FIX: PDA seeds. The program derives PDAs from the fixture id as
+// u64 LITTLE-ENDIAN BYTES (`fixture_id.to_le_bytes()`). This file previously
+// used `Buffer.from(fixtureId.toString())` (the ASCII string), so every PDA
+// derived here pointed at a non-existent account.
 
 const anchor = require("@coral-xyz/anchor");
 const {
   Connection, PublicKey, Keypair,
-  SystemProgram, SYSVAR_CLOCK_PUBKEY
 } = require("@solana/web3.js");
-const {
-  TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-} = require("@solana/spl-token");
 const bs58 = require("bs58");
 const fs = require("fs");
 const path = require("path");
@@ -57,11 +54,18 @@ async function getProgram() {
   return _program;
 }
 
+// fixture id -> u64 LE bytes, matching `fixture_id.to_le_bytes()` in Rust
+function fixtureIdBytes(fixtureId) {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(BigInt(fixtureId));
+  return buf;
+}
+
 // Derive market PDA
 function getMarketPda(fixtureId, programId) {
   const pid = new PublicKey(programId || config.settleProgramId);
   const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from(constants.SEEDS.MARKET), Buffer.from(fixtureId.toString())],
+    [Buffer.from(constants.SEEDS.MARKET), fixtureIdBytes(fixtureId)],
     pid
   );
   return pda;
@@ -74,7 +78,7 @@ function getVaultPda(fixtureId, side, programId) {
     ? constants.SEEDS.YES_VAULT
     : constants.SEEDS.NO_VAULT;
   const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from(seed), Buffer.from(fixtureId.toString())],
+    [Buffer.from(seed), fixtureIdBytes(fixtureId)],
     pid
   );
   return pda;
@@ -86,7 +90,7 @@ function getPositionPda(fixtureId, userPubkey, programId) {
   const [pda] = PublicKey.findProgramAddressSync(
     [
       Buffer.from(constants.SEEDS.POSITION),
-      Buffer.from(fixtureId.toString()),
+      fixtureIdBytes(fixtureId),
       new PublicKey(userPubkey).toBuffer(),
     ],
     pid
@@ -100,4 +104,5 @@ module.exports = {
   getVaultPda,
   getPositionPda,
   loadWallet,
+  fixtureIdBytes,
 };

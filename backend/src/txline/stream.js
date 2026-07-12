@@ -1,6 +1,10 @@
 // backend/src/txline/stream.js
 // Connects to TxLINE live SSE stream.
-// Every event contains full Stats + Clock + Action.
+//
+// Fix: score updates now also emit on status-only payloads (StatusId present
+// but Stats/Clock missing) — this is exactly what half-time events look like.
+// normalize.js keeps the score and minute sticky, so the frontend gets a
+// correct "HT, 45', 1-0" instead of "Pre-Match, 0', 0-0".
 
 const EventSource = require("eventsource");
 const { makeHeaders } = require("./auth");
@@ -20,8 +24,8 @@ const PUNDIT_TRIGGERS = new Set([
   "goal", "possible_goal", "penalty", "red_card", "var"
 ]);
 
-// Score store — saves last known score for every fixture
-// TxLINE removes score data after match ends, so we keep our own copy
+// Score store — saves last known score for every fixture.
+// TxLINE removes score data after match ends, so we keep our own copy.
 const scoreStore = {};
 
 function getLastScore(fixtureId) {
@@ -55,11 +59,17 @@ function _connect() {
   es.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+      if (!data || data.FixtureId === undefined) return;
 
-      // Every event has Stats + Clock -- always emit score update
-      if (data.Stats && data.Clock) {
+      // Emit a score update on ANY payload that carries game state:
+      // stats, clock, OR just a status change (half time / full time).
+      const hasGameState =
+        data.Stats !== undefined ||
+        data.Clock !== undefined ||
+        data.StatusId !== undefined;
+
+      if (hasGameState) {
         const score = normalizeScore(data);
-        // Save to score store so we can serve it after TxLINE clears it
         scoreStore[data.FixtureId] = score;
         onScoreUpdate(score);
       }

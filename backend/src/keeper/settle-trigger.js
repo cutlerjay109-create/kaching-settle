@@ -1,252 +1,427 @@
 // backend/src/keeper/settle-trigger.js
-// Watches for completed fixtures and triggers settlement.
-// Fetches TxLINE proof, verifies it, then calls program settle.
-// This is the robot that closes markets automatically.
+// Watches for completed fixtures and settles markets ON-CHAIN.
+// Flow per market: verify TxLINE proof -> lock (if open) -> settle(winning_side)
+// -> broadcast. Voids markets where one side is empty.
+//
+// Key fixes in this version:
+// 1. Settlement now actually lands on-chain (lock + settle txs were missing).
+// 2. Markets are recovered from the chain at startup, so a Railway restart
+//    or TxLINE removing a finished fixture can never orphan a market again.
+// 3. Multi-keypair authority support: the keeper picks whichever configured
+//    key matches market.authority. Add older wallets (e.g. Phantom) via
+//    AUTHORITY_KEYPAIRS in .env (comma-separated base58 secret keys).
+// 4. Authority-mismatch markets retry hourly with a clear actionable log
+//    instead of erroring silently every 60s.
 
-const { verifyStat } = require("../txline/validate");
 const {
   Connection, PublicKey, Transaction,
   TransactionInstruction, Keypair
 } = require("@solana/web3.js");
 const bs58 = require("bs58");
+const config = require("../../shared/config");
+const constants = require("../../shared/constants");
+const { verifyStat } = require("../txline/validate");
+const { getCompleted, getPastKickoff } = require("../txline/fixtures");
+const { generateCommentary } = require("../ai/pundit");
+const { generateVoice } = require("../ai/voice");
 
-const DISC_VOID = Buffer.from([243, 175, 46, 124, 95, 101, 39, 69]);
-const DISC_LOCK = Buffer.from([107, 8, 184, 91, 223, 13, 180, 38]);
+// Anchor discriminators — sha256("global:<name>")[0..8]
+const DISC_LOCK   = Buffer.from([107, 8, 184, 91, 223, 13, 180, 38]);
 const DISC_SETTLE = Buffer.from([175, 42, 185, 87, 144, 131, 102, 212]);
+const DISC_VOID   = Buffer.from([243, 175, 46, 124, 95, 101, 39, 69]);
+// sha256("account:Market")[0..8] — for getProgramAccounts filtering
+const MARKET_ACCOUNT_DISC = Buffer.from([219, 190, 213, 55, 0, 227, 198, 154]);
+const MARKET_ACCOUNT_LEN = 294;
 
-function loadKeeperWallet() {
-  const raw = process.env.WALLET_KEYPAIR.trim();
+const STATUS = constants.STATUS; // 0 open, 1 locked, 2 settled, 3 void
+
+// ── Wallets ─────────────────────────────────────────────
+let _keypairs = null;
+
+function loadKeypairs() {
+  if (_keypairs) return _keypairs;
   const decoder = bs58.default || bs58;
-  return Keypair.fromSecretKey(decoder.decode(raw));
+  const keys = [];
+  const tryPush = (raw, label) => {
+    if (!raw || !raw.trim()) return;
+    try {
+      keys.push(Keypair.fromSecretKey(decoder.decode(raw.trim())));
+    } catch (e) {
+      console.error(`[keeper] Could not decode ${label}:`, e.message);
+    }
+  };
+  tryPush(process.env.WALLET_KEYPAIR, "WALLET_KEYPAIR");
+  // Optional: extra authority keys for markets created by other wallets
+  // (e.g. markets created earlier with the Phantom wallet).
+  // AUTHORITY_KEYPAIRS=base58key1,base58key2
+  if (process.env.AUTHORITY_KEYPAIRS) {
+    process.env.AUTHORITY_KEYPAIRS.split(",").forEach((k, i) =>
+      tryPush(k, `AUTHORITY_KEYPAIRS[${i}]`)
+    );
+  }
+  if (!keys.length) throw new Error("No valid keypair in WALLET_KEYPAIR");
+  _keypairs = keys;
+  console.log("[keeper] Loaded signer(s):", keys.map(k => k.publicKey.toBase58().slice(0, 8) + "...").join(", "));
+  return keys;
 }
 
+function walletForAuthority(authority) {
+  return loadKeypairs().find(k => k.publicKey.equals(authority)) || null;
+}
+
+// ── PDA + account helpers ───────────────────────────────
 function fixtureIdBytes(id) {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64LE(BigInt(id));
   return buf;
 }
 
-async function voidMarketOnChain(fixtureId) {
-  const config = require("../../shared/config");
-  const constants = require("../../shared/constants");
-  const wallet = loadKeeperWallet();
-  const connection = new Connection(config.rpc, "confirmed");
-  const programId = new PublicKey(config.settleProgramId);
+function getProgramId() {
+  return new PublicKey(config.settleProgramId);
+}
 
-  const [marketPda] = PublicKey.findProgramAddressSync(
+function getMarketPda(fixtureId) {
+  return PublicKey.findProgramAddressSync(
     [Buffer.from(constants.SEEDS.MARKET), fixtureIdBytes(fixtureId)],
-    programId
-  );
+    getProgramId()
+  )[0];
+}
 
-  // Lock first if needed
-  const info = await connection.getAccountInfo(marketPda);
-  if (!info) return;
-  const status = info.data.readUInt8(8 + 8 + 4 + info.data.readUInt32LE(8 + 8) + 8 + 4 + 8 + 1 + 8 + 8);
+function getConnection() {
+  return new Connection(config.rpc, "confirmed");
+}
 
-  if (status === 0) {
-    const lockIx = new TransactionInstruction({
-      programId,
-      keys: [
-        { pubkey: wallet.publicKey, isSigner: true, isWritable: false },
-        { pubkey: marketPda, isSigner: false, isWritable: true },
-      ],
-      data: DISC_LOCK,
-    });
-    const lockTx = new Transaction().add(lockIx);
-    lockTx.feePayer = wallet.publicKey;
-    lockTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-    lockTx.sign(wallet);
-    await connection.sendRawTransaction(lockTx.serialize());
-    await new Promise(r => setTimeout(r, 2000));
-  }
+// Decode a raw Market account (matches program/src/state/market.rs)
+function decodeMarket(d) {
+  let o = 8; // skip discriminator
+  const fixtureId = Number(d.readBigUInt64LE(o)); o += 8;
+  const qLen = d.readUInt32LE(o); o += 4;
+  const question = d.slice(o, o + qLen).toString("utf8"); o += qLen;
+  const kickoffTs = Number(d.readBigInt64LE(o)); o += 8;
+  const statKey = d.readUInt32LE(o); o += 4;
+  const threshold = Number(d.readBigUInt64LE(o)); o += 8;
+  const comparison = d.readUInt8(o); o += 1;
+  const yesTotal = d.readBigUInt64LE(o); o += 8;
+  const noTotal = d.readBigUInt64LE(o); o += 8;
+  const status = d.readUInt8(o); o += 1;
+  const winningSide = d.readUInt8(o); o += 1;
+  const authority = new PublicKey(d.slice(o, o + 32)); o += 32;
+  return {
+    fixtureId, question, kickoffTs, statKey, threshold, comparison,
+    yesTotal, noTotal, status, winningSide, authority,
+  };
+}
 
-  const voidIx = new TransactionInstruction({
-    programId,
+async function fetchMarketAccount(connection, fixtureId) {
+  const info = await connection.getAccountInfo(getMarketPda(fixtureId));
+  if (!info) return null;
+  return decodeMarket(info.data);
+}
+
+// ── On-chain transactions ───────────────────────────────
+async function sendAuthorityIx(connection, wallet, data, fixtureId) {
+  const ix = new TransactionInstruction({
+    programId: getProgramId(),
     keys: [
       { pubkey: wallet.publicKey, isSigner: true, isWritable: false },
-      { pubkey: marketPda, isSigner: false, isWritable: true },
+      { pubkey: getMarketPda(fixtureId), isSigner: false, isWritable: true },
     ],
-    data: DISC_VOID,
+    data,
   });
-
-  const voidTx = new Transaction().add(voidIx);
-  voidTx.feePayer = wallet.publicKey;
-  voidTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-  voidTx.sign(wallet);
-  const sig = await connection.sendRawTransaction(voidTx.serialize());
+  const tx = new Transaction().add(ix);
+  tx.feePayer = wallet.publicKey;
+  tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+  tx.sign(wallet);
+  const sig = await connection.sendRawTransaction(tx.serialize());
   await connection.confirmTransaction(sig, "confirmed");
-  console.log("[keeper] Market voided:", fixtureId, sig.slice(0,20) + "...");
   return sig;
 }
-const { getCompleted, getPastKickoff } = require("../txline/fixtures");
-const { generateCommentary } = require("../ai/pundit");
-const { generateVoice } = require("../ai/voice");
 
-// In-memory map of active markets
-// { fixtureId: { marketId, question, statKey, threshold, comparison, status } }
+class AuthorityMismatchError extends Error {
+  constructor(authority) {
+    super(`No configured keypair matches market authority ${authority.toBase58()}`);
+    this.name = "AuthorityMismatchError";
+    this.authority = authority;
+  }
+}
+
+// Lock (if open) then settle. Returns { settleSig, alreadyDone }.
+async function settleMarketOnChain(fixtureId, winningSide) {
+  const connection = getConnection();
+  let market = await fetchMarketAccount(connection, fixtureId);
+  if (!market) return { alreadyDone: true, reason: "no market account on-chain" };
+  if (market.status === STATUS.SETTLED) return { alreadyDone: true, reason: "already settled" };
+  if (market.status === STATUS.VOID) return { alreadyDone: true, reason: "already voided" };
+
+  const wallet = walletForAuthority(market.authority);
+  if (!wallet) throw new AuthorityMismatchError(market.authority);
+
+  if (market.status === STATUS.OPEN) {
+    const lockSig = await sendAuthorityIx(connection, wallet, DISC_LOCK, fixtureId);
+    console.log(`[keeper] Locked market ${fixtureId}: ${lockSig.slice(0, 20)}...`);
+  }
+
+  const settleData = Buffer.concat([DISC_SETTLE, Buffer.from([winningSide])]);
+  const settleSig = await sendAuthorityIx(connection, wallet, settleData, fixtureId);
+  console.log(`[keeper] Settled market ${fixtureId} on-chain (side ${winningSide}): ${settleSig.slice(0, 20)}...`);
+  return { settleSig };
+}
+
+// Lock (if open) then void.
+async function voidMarketOnChain(fixtureId) {
+  const connection = getConnection();
+  const market = await fetchMarketAccount(connection, fixtureId);
+  if (!market) return { alreadyDone: true };
+  if (market.status === STATUS.SETTLED || market.status === STATUS.VOID) return { alreadyDone: true };
+
+  const wallet = walletForAuthority(market.authority);
+  if (!wallet) throw new AuthorityMismatchError(market.authority);
+
+  if (market.status === STATUS.OPEN) {
+    const lockSig = await sendAuthorityIx(connection, wallet, DISC_LOCK, fixtureId);
+    console.log(`[keeper] Locked market ${fixtureId}: ${lockSig.slice(0, 20)}...`);
+  }
+
+  const sig = await sendAuthorityIx(connection, wallet, DISC_VOID, fixtureId);
+  console.log(`[keeper] Voided market ${fixtureId}: ${sig.slice(0, 20)}...`);
+  return { voidSig: sig };
+}
+
+// ── Watch list ──────────────────────────────────────────
+// { fixtureId -> { marketId, question, statKey, threshold, comparison,
+//                  status, kickoffMs, home, away, nextRetryAt } }
 const activeMarkets = new Map();
 let settleCallback = null;
 let checkInterval = null;
 
 function registerMarket(market) {
-  activeMarkets.set(market.fixtureId, market);
-  console.log(`[keeper] Watching fixture ${market.fixtureId}: "${market.question}"`);
+  const existing = activeMarkets.get(market.fixtureId);
+  // Never resurrect a market we already finished processing
+  if (existing && existing.status === "settled") return;
+  activeMarkets.set(market.fixtureId, { ...existing, ...market });
+  if (!existing) {
+    console.log(`[keeper] Watching fixture ${market.fixtureId}: "${market.question}"`);
+  }
+}
+
+function getWatchedMarkets() {
+  return Array.from(activeMarkets.values()).map(m => ({
+    fixtureId: m.fixtureId,
+    question: m.question,
+    home: m.home || null,
+    away: m.away || null,
+    status: m.status,
+    kickoffMs: m.kickoffMs || null,
+  }));
 }
 
 function onSettle(callback) {
   settleCallback = callback;
 }
 
+// Recover every unsettled market straight from the chain.
+// This is the source of truth — survives restarts and TxLINE feed removal.
+async function recoverMarketsFromChain() {
+  try {
+    const connection = getConnection();
+    const decoder = bs58.default || bs58;
+    const accounts = await connection.getProgramAccounts(getProgramId(), {
+      filters: [
+        { dataSize: MARKET_ACCOUNT_LEN },
+        { memcmp: { offset: 0, bytes: decoder.encode(MARKET_ACCOUNT_DISC) } },
+      ],
+    });
+
+    let recovered = 0;
+    for (const { account } of accounts) {
+      let m;
+      try { m = decodeMarket(account.data); } catch (e) { continue; }
+      if (m.status === STATUS.SETTLED || m.status === STATUS.VOID) continue;
+
+      // Parse team names from the auto-generated question when possible
+      let home = null, away = null;
+      const match = m.question.match(/^Will (.+) score a goal against (.+)\?$/);
+      if (match) { home = match[1]; away = match[2]; }
+
+      registerMarket({
+        fixtureId: m.fixtureId,
+        marketId: m.fixtureId,
+        question: m.question,
+        statKey: m.statKey,
+        threshold: m.threshold,
+        comparison: m.comparison === 1 ? "lessThan" : "greaterThan",
+        status: "active",
+        kickoffMs: m.kickoffTs * 1000,
+        home, away,
+      });
+      recovered++;
+    }
+    console.log(`[keeper] Recovered ${recovered} unsettled market(s) from chain (${accounts.length} total)`);
+  } catch (e) {
+    console.error("[keeper] Chain recovery failed:", e.message);
+  }
+}
+
+// ── Main loop ───────────────────────────────────────────
 async function checkAndSettle() {
   if (!activeMarkets.size) return;
-
   const now = Date.now();
 
-  // Build fixture list from THREE sources:
+  // Build fixture list from three sources:
   // 1. TxLINE completed fixtures
-  // 2. Past-kickoff fixtures still in feed
-  // 3. Active markets whose kickoff time has passed (most reliable)
-  const completed = await getCompleted();
-  const pastKickoff = await getPastKickoff();
-
-  const seen = new Set(completed.map(f => f.fixtureId));
-  for (const f of pastKickoff) {
-    if (!seen.has(f.fixtureId)) {
-      completed.push(f);
-      seen.add(f.fixtureId);
+  // 2. Past-kickoff fixtures still in the feed
+  // 3. Watched markets whose kickoff was >2.5h ago (TxLINE removes finished
+  //    fixtures from the feed, so this is the one that usually matters)
+  let completed = [];
+  try {
+    completed = await getCompleted();
+    const pastKickoff = await getPastKickoff();
+    const seen = new Set(completed.map(f => f.fixtureId));
+    for (const f of pastKickoff) {
+      if (!seen.has(f.fixtureId)) { completed.push(f); seen.add(f.fixtureId); }
     }
-  }
-
-  // Most importantly: check ALL active markets by their kickoff time
-  // This catches matches TxLINE has removed from the feed entirely
-  for (const [fixtureId, market] of activeMarkets) {
-    if (!seen.has(fixtureId) && market.kickoffMs) {
-      // If kickoff was more than 2.5 hours ago — match is almost certainly done
-      if (now - market.kickoffMs > 2.5 * 60 * 60 * 1000) {
+    for (const [fixtureId, market] of activeMarkets) {
+      if (!seen.has(fixtureId) && market.kickoffMs &&
+          now - market.kickoffMs > 2.5 * 60 * 60 * 1000) {
         completed.push({ fixtureId, ...market });
         seen.add(fixtureId);
-        console.log(`[keeper] Adding past-kickoff market to check: ${fixtureId}`);
       }
     }
+  } catch (e) {
+    console.error("[keeper] Fixture check failed:", e.message);
+    return;
   }
 
   for (const fixture of completed) {
     const market = activeMarkets.get(fixture.fixtureId);
     if (!market || market.status === "settled") continue;
+    if (market.nextRetryAt && now < market.nextRetryAt) continue;
 
-    console.log(`[keeper] Fixture ${fixture.fixtureId} completed — verifying...`);
+    console.log(`[keeper] Fixture ${fixture.fixtureId} completed — processing...`);
 
     try {
-      // Check on-chain market state first
-      const { Connection, PublicKey } = require("@solana/web3.js");
-      const config = require("../../shared/config");
-      const constants = require("../../shared/constants");
-      const { getProgram, getMarketPda } = require("../program/client");
+      const connection = getConnection();
+      const onChain = await fetchMarketAccount(connection, fixture.fixtureId);
 
-      const connection = new Connection(config.rpc, "confirmed");
-      const programId = new PublicKey(config.settleProgramId);
-
-      function fixtureIdBytes(id) {
-        const buf = Buffer.alloc(8);
-        buf.writeBigUInt64LE(BigInt(id));
-        return buf;
+      // No market account: nothing to settle — stop watching
+      if (!onChain) {
+        market.status = "settled";
+        continue;
       }
 
-      const [marketPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from(constants.SEEDS.MARKET), fixtureIdBytes(fixture.fixtureId)],
-        programId
-      );
+      // Someone (or a previous run) already finished it — sync local state
+      if (onChain.status === STATUS.SETTLED || onChain.status === STATUS.VOID) {
+        market.status = "settled";
+        continue;
+      }
 
-      const info = await connection.getAccountInfo(marketPda);
-      if (info) {
-        const d = info.data;
-        let o = 8;
-        o += 8;
-        const qLen = d.readUInt32LE(o); o += 4 + qLen;
-        o += 8 + 4 + 8 + 1;
-        const yesTotal = d.readBigUInt64LE(o); o += 8;
-        const noTotal = d.readBigUInt64LE(o);
-
-        // If one side is empty — void the market on-chain
-        if (yesTotal === 0n || noTotal === 0n) {
-          console.log(`[keeper] One side empty for ${fixture.fixtureId} — voiding market on-chain`);
-          try {
-            await voidMarketOnChain(fixture.fixtureId);
-          } catch(e) {
-            console.error("[keeper] Void failed:", e.message);
-          }
-          // Mark as settled regardless to stop retrying
-          market.status = "settled";
-          activeMarkets.set(fixture.fixtureId, market);
-          if (settleCallback) {
-            settleCallback({
-              fixtureId: fixture.fixtureId,
-              marketId: market.marketId,
-              question: market.question,
-              result: null,
-              winningSide: "VOID",
-              proof: null,
-              commentary: "This market has been voided — one side had no deposits. All funds will be refunded.",
-              audioUrl: null,
-              settledAt: Date.now(),
-              voided: true,
-            });
-          }
-          market.status = "settled";
-          activeMarkets.set(fixture.fixtureId, market);
-          continue;
+      // One side empty -> void so everyone can refund
+      if (onChain.yesTotal === 0n || onChain.noTotal === 0n) {
+        console.log(`[keeper] One side empty for ${fixture.fixtureId} — voiding on-chain`);
+        await voidMarketOnChain(fixture.fixtureId);
+        market.status = "settled";
+        if (settleCallback) {
+          settleCallback({
+            fixtureId: fixture.fixtureId,
+            marketId: market.marketId,
+            question: market.question,
+            result: null,
+            winningSide: "VOID",
+            proof: null,
+            commentary: "This market has been voided — one side had no deposits. All funds are refundable now.",
+            audioUrl: null,
+            settledAt: Date.now(),
+            voided: true,
+          });
         }
+        continue;
       }
 
+      // Verify the result via TxLINE Merkle proof.
+      // Use on-chain predicate as source of truth (registration data may drift).
       const { result, proof } = await verifyStat({
         fixtureId: fixture.fixtureId,
-        statKey: market.statKey,
-        threshold: market.threshold,
-        comparison: market.comparison,
+        statKey: onChain.statKey,
+        threshold: onChain.threshold,
+        comparison: onChain.comparison === 1 ? "lessThan" : "greaterThan",
       });
 
+      const winningSideNum = result ? constants.SIDE.YES : constants.SIDE.NO;
       const winningSide = result ? "YES" : "NO";
 
-      // Generate AI commentary
-      const text = await generateCommentary({
-        fixture,
-        question: market.question,
-        result,
-        winningSide,
-        proof,
-      });
+      // THE critical step that was missing: settle on-chain
+      const { settleSig, alreadyDone } = await settleMarketOnChain(
+        fixture.fixtureId, winningSideNum
+      );
+      if (alreadyDone) {
+        market.status = "settled";
+        continue;
+      }
 
-      const audioUrl = await generateVoice(text);
-
-      const settlement = {
-        fixtureId: fixture.fixtureId,
-        marketId: market.marketId,
-        question: market.question,
-        result,
-        winningSide,
-        proof,
-        commentary: text,
-        audioUrl,
-        settledAt: Date.now(),
-      };
+      // AI commentary — failures here must never block settlement
+      let text = `${winningSide} wins — result verified by TxLINE proof and settled on Solana.`;
+      let audioUrl = null;
+      try {
+        text = await generateCommentary({
+          fixture: {
+            home: fixture.home || market.home || "Home",
+            away: fixture.away || market.away || "Away",
+          },
+          question: market.question || onChain.question,
+          result,
+          winningSide,
+          proof,
+        });
+        audioUrl = await generateVoice(text);
+      } catch (e) {
+        console.error("[keeper] Commentary failed (settlement unaffected):", e.message);
+      }
 
       market.status = "settled";
-      activeMarkets.set(fixture.fixtureId, market);
 
-      console.log(`[keeper] Settled: ${winningSide} wins — ${text}`);
+      console.log(`[keeper] Settled ${fixture.fixtureId}: ${winningSide} wins — ${text}`);
 
-      if (settleCallback) settleCallback(settlement);
+      if (settleCallback) {
+        settleCallback({
+          fixtureId: fixture.fixtureId,
+          marketId: market.marketId,
+          question: market.question || onChain.question,
+          result,
+          winningSide,
+          proof,
+          commentary: text,
+          audioUrl,
+          settleTx: settleSig,
+          settledAt: Date.now(),
+        });
+      }
 
     } catch (e) {
-      console.error(`[keeper] Settle error for ${fixture.fixtureId}:`, e.message);
+      if (e.name === "AuthorityMismatchError") {
+        // Retry hourly, not every 60s, and tell the operator exactly what to do
+        market.nextRetryAt = now + 60 * 60 * 1000;
+        console.error(
+          `[keeper] Cannot settle ${fixture.fixtureId}: market authority is ` +
+          `${e.authority.toBase58()} but no configured key matches it.\n` +
+          `         Fix: add that wallet's base58 secret key to AUTHORITY_KEYPAIRS ` +
+          `in the backend .env (comma-separated), or run scripts/manual-settle.js ` +
+          `with that wallet as WALLET_KEYPAIR.`
+        );
+      } else {
+        // Transient (proof not ready yet, RPC hiccup) — retry next cycle
+        console.error(`[keeper] Settle error for ${fixture.fixtureId}:`, e.message);
+      }
     }
   }
 }
 
 function start(intervalMs = 60000) {
   console.log(`[keeper] Started — checking every ${intervalMs / 1000}s`);
-  checkInterval = setInterval(checkAndSettle, intervalMs);
-  checkAndSettle(); // run immediately
+  // Recover chain state first, then begin the loop
+  recoverMarketsFromChain().finally(() => {
+    checkAndSettle();
+    checkInterval = setInterval(checkAndSettle, intervalMs);
+  });
 }
 
 function stop() {
@@ -254,4 +429,13 @@ function stop() {
   console.log("[keeper] Stopped");
 }
 
-module.exports = { registerMarket, onSettle, start, stop };
+module.exports = {
+  registerMarket,
+  getWatchedMarkets,
+  onSettle,
+  start,
+  stop,
+  settleMarketOnChain,
+  voidMarketOnChain,
+  recoverMarketsFromChain,
+};

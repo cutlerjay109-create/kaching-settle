@@ -216,3 +216,19 @@ export async function getMarket(fixtureId) {
     winningSide,
   };
 }
+
+// Fetch and decode a user's Position account. Returns null if none.
+export async function getPosition(fixtureId, user) {
+  const connection = getConnection();
+  const pda = getPositionPda(fixtureId, user);
+  const info = await connection.getAccountInfo(pda);
+  if (!info) return null;
+
+  const d = info.data;
+  let o = 8 + 8 + 32; // discriminator + fixture_id + user
+  const side = d.readUInt8(o); o += 1;
+  const amount = Number(d.readBigUInt64LE(o)) / 1_000_000; o += 8;
+  const claimed = d.readUInt8(o) === 1;
+
+  return { side, amount, claimed };
+}

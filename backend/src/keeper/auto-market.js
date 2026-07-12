@@ -165,13 +165,7 @@ async function autoCreateMarkets() {
 
 const DISC_DEPOSIT = Buffer.from([242, 35, 198, 137, 82, 225, 242, 182]);
 
-function u64le(n) {
-  const buf = Buffer.alloc(8);
-  buf.writeBigUInt64LE(BigInt(Math.floor(n)));
-  return buf;
-}
-
-// getVaultPda defined above — using seed string directly
+// u64le and getVaultPda defined above
 
 function getPositionPda(fixtureId, user) {
   return PublicKey.findProgramAddressSync(

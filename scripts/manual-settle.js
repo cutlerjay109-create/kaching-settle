@@ -1,3 +1,12 @@
+// scripts/manual-settle.js
+// Manually lock + settle (or void) a market from the CLI.
+//
+// Usage:
+//   node scripts/manual-settle.js <fixtureId> <YES|NO|VOID>
+//
+// The signer is WALLET_KEYPAIR from backend/.env. The script reads the
+// market's on-chain authority first and tells you exactly which wallet
+// must sign if there's a mismatch (e.g. markets created with Phantom).
 
 require("module").globalPaths.push(__dirname + "/../backend/node_modules");
 require("dotenv").config({ path: __dirname + "/../backend/.env" });
@@ -16,6 +25,7 @@ const PROGRAM_ID = new PublicKey(config.settleProgramId);
 const DISC = {
   lock_market: Buffer.from([107, 8, 184, 91, 223, 13, 180, 38]),
   settle: Buffer.from([175, 42, 185, 87, 144, 131, 102, 212]),
+  void_market: Buffer.from([243, 175, 46, 124, 95, 101, 39, 69]),
 };
 
 function loadWallet() {
@@ -37,85 +47,94 @@ function getMarketPda(fixtureId) {
   )[0];
 }
 
+function decodeMarket(d) {
+  let o = 8;
+  const fixtureId = Number(d.readBigUInt64LE(o)); o += 8;
+  const qLen = d.readUInt32LE(o); o += 4;
+  const question = d.slice(o, o + qLen).toString("utf8"); o += qLen;
+  const kickoffTs = Number(d.readBigInt64LE(o)); o += 8;
+  o += 4 + 8 + 1; // stat_key, threshold, comparison
+  const yesTotal = Number(d.readBigUInt64LE(o)) / 1e6; o += 8;
+  const noTotal = Number(d.readBigUInt64LE(o)) / 1e6; o += 8;
+  const status = d.readUInt8(o); o += 1;
+  const winningSide = d.readUInt8(o); o += 1;
+  const authority = new PublicKey(d.slice(o, o + 32));
+  return { fixtureId, question, kickoffTs, yesTotal, noTotal, status, winningSide, authority };
+}
+
+async function sendIx(connection, wallet, marketPda, data) {
+  const ix = new TransactionInstruction({
+    programId: PROGRAM_ID,
+    keys: [
+      { pubkey: wallet.publicKey, isSigner: true, isWritable: false },
+      { pubkey: marketPda, isSigner: false, isWritable: true },
+    ],
+    data,
+  });
+  const tx = new Transaction().add(ix);
+  tx.feePayer = wallet.publicKey;
+  tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+  tx.sign(wallet);
+  const sig = await connection.sendRawTransaction(tx.serialize());
+  await connection.confirmTransaction(sig, "confirmed");
+  return sig;
+}
+
 async function main() {
-  // France vs Morocco — France scored, YES wins
-  const FIXTURE_ID = 18218149;
-  const WINNING_SIDE = 0; // 0 = YES (Spain scored)
+  const fixtureId = parseInt(process.argv[2]);
+  const outcome = (process.argv[3] || "").toUpperCase();
+
+  if (!fixtureId || !["YES", "NO", "VOID"].includes(outcome)) {
+    console.log("Usage: node scripts/manual-settle.js <fixtureId> <YES|NO|VOID>");
+    process.exit(1);
+  }
 
   const wallet = loadWallet();
   const connection = new Connection(config.rpc, "confirmed");
-  const marketPda = getMarketPda(FIXTURE_ID);
+  const marketPda = getMarketPda(fixtureId);
 
+  console.log("Signer:    ", wallet.publicKey.toBase58());
   console.log("Market PDA:", marketPda.toBase58());
 
-  // Read current status
   const info = await connection.getAccountInfo(marketPda);
-  if (!info) { console.log("Market not found"); return; }
+  if (!info) { console.log("Market not found on-chain."); return; }
 
-  const d = info.data;
-  let o = 8 + 8;
-  const qLen = d.readUInt32LE(o); o += 4 + qLen;
-  o += 8 + 4 + 8 + 1;
-  const yesTotal = Number(d.readBigUInt64LE(o))/1e6; o += 8;
-  const noTotal = Number(d.readBigUInt64LE(o))/1e6; o += 8;
-  const status = d.readUInt8(o);
+  const m = decodeMarket(info.data);
+  console.log(`Question:   ${m.question}`);
+  console.log(`YES pot: $${m.yesTotal}  NO pot: $${m.noTotal}  Status: ${m.status}`);
+  console.log(`Authority:  ${m.authority.toBase58()}`);
 
-  console.log("YES pot:", yesTotal, "NO pot:", noTotal, "Status:", status);
+  if (m.status === 2) { console.log("Already settled. Winning side:", m.winningSide === 0 ? "YES" : "NO"); return; }
+  if (m.status === 3) { console.log("Already voided."); return; }
 
-  // Step 1: Lock market if still open
-  if (status === 0) {
-    console.log("Locking market first...");
-    const lockData = Buffer.concat([DISC.lock_market]);
-    const lockIx = new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: wallet.publicKey, isSigner: true, isWritable: false },
-        { pubkey: marketPda, isSigner: false, isWritable: true },
-      ],
-      data: lockData,
-    });
-
-    const lockTx = new Transaction().add(lockIx);
-    lockTx.feePayer = wallet.publicKey;
-    lockTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-    lockTx.sign(wallet);
-    const lockSig = await connection.sendRawTransaction(lockTx.serialize());
-    await connection.confirmTransaction(lockSig, "confirmed");
-    console.log("Locked:", lockSig.slice(0,20) + "...");
+  if (!m.authority.equals(wallet.publicKey)) {
+    console.log("\n❌ AUTHORITY MISMATCH");
+    console.log("This market can only be settled by:", m.authority.toBase58());
+    console.log("Set WALLET_KEYPAIR in backend/.env to THAT wallet's base58 secret key and rerun.");
+    process.exit(1);
   }
 
-  // Step 2: Settle
-  if (status <= 1) {
-    console.log("Settling — YES wins (Spain scored)...");
-    const settleData = Buffer.concat([
-      DISC.settle,
-      Buffer.from([WINNING_SIDE]),
-    ]);
+  // Step 1: Lock if open
+  if (m.status === 0) {
+    console.log("Locking market...");
+    const sig = await sendIx(connection, wallet, marketPda, DISC.lock_market);
+    console.log("Locked:", sig);
+  }
 
-    const settleIx = new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: wallet.publicKey, isSigner: true, isWritable: false },
-        { pubkey: marketPda, isSigner: false, isWritable: true },
-      ],
-      data: settleData,
-    });
-
-    const settleTx = new Transaction().add(settleIx);
-    settleTx.feePayer = wallet.publicKey;
-    settleTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-    settleTx.sign(wallet);
-    const settleSig = await connection.sendRawTransaction(settleTx.serialize());
-    await connection.confirmTransaction(settleSig, "confirmed");
-    console.log("Settled! TX:", settleSig.slice(0,20) + "...");
-    console.log("Explorer: https://solscan.io/tx/" + settleSig + "?cluster=devnet");
-    console.log("YES backers can now claim! Spain 2-1 Belgium");
+  // Step 2: Settle or void
+  if (outcome === "VOID") {
+    console.log("Voiding market...");
+    const sig = await sendIx(connection, wallet, marketPda, DISC.void_market);
+    console.log("Voided:", sig);
   } else {
-    console.log("Market already settled, status:", status);
+    const side = outcome === "YES" ? 0 : 1;
+    console.log(`Settling — ${outcome} wins...`);
+    const data = Buffer.concat([DISC.settle, Buffer.from([side])]);
+    const sig = await sendIx(connection, wallet, marketPda, data);
+    console.log("Settled:", sig);
   }
+
+  console.log("\n✅ Done. Positions page will now show the final state.");
 }
 
-main().catch(e => {
-  console.error("Error:", e.message);
-  if (e.logs) e.logs.forEach(l => console.error(" ", l));
-});
+main().catch(e => { console.error("Error:", e.message); process.exit(1); });
