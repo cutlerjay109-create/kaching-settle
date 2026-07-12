@@ -188,24 +188,3 @@ code { background: #1e1e2e; padding: 2px 4px; border-radius: 4px; font-size: 11p
 .result-win { color: #4ade80; font-weight: 700; }
 .result-loss { color: #f87171; }
 .result-claimed { color: #888; }
-
-/* Position card score display */
-.position-match-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.position-score {
-  background: #1a1a2e;
-  color: #00ff88;
-  font-size: 16px;
-  font-weight: 700;
-  font-family: monospace;
-  padding: 2px 10px;
-  border-radius: 6px;
-  border: 1px solid #00ff8844;
-  white-space: nowrap;
-  letter-spacing: 2px;
-}

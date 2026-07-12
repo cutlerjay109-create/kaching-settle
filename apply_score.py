@@ -22,43 +22,7 @@ const CORS_ORIGINS = [
 const auth = require("./txline/auth");
 const stream = require("./txline/stream");
 const { getLastScore } = require("./txline/stream");
-const path = require("path");
-const fs = require("fs");
 
-// Persistent score store — survives Railway restarts
-// Scores are written here by the SSE stream and manually seeded for past matches.
-const SCORE_STORE_PATH = path.join(__dirname, "../../data/scores.json");
-
-function loadPersistedScores() {
-  try {
-    if (fs.existsSync(SCORE_STORE_PATH)) {
-      return JSON.parse(fs.readFileSync(SCORE_STORE_PATH, "utf8"));
-    }
-  } catch(e) {}
-  return {};
-}
-
-function savePersistedScores(store) {
-  try {
-    fs.mkdirSync(path.dirname(SCORE_STORE_PATH), { recursive: true });
-    fs.writeFileSync(SCORE_STORE_PATH, JSON.stringify(store, null, 2));
-  } catch(e) {}
-}
-
-// Seed known final scores for completed matches
-// Format: { fixtureId: { homeGoals, awayGoals, period: 5 } }
-const KNOWN_SCORES = {
-  18213979: { homeGoals: 1, awayGoals: 2, period: 5, minute: 90 }, // Norway 1-2 England
-  18222446: { homeGoals: 1, awayGoals: 2, period: 5, minute: 90 }, // Argentina 1-2 Switzerland
-};
-
-const persistedScores = { ...KNOWN_SCORES, ...loadPersistedScores() };
-
-// Persist score when SSE stream updates it
-function persistScore(fixtureId, score) {
-  persistedScores[fixtureId] = score;
-  savePersistedScores(persistedScores);
-}
 const { fetchFixtures, getUpcoming } = require("./txline/fixtures");
 const keeper = require("./keeper/settle-trigger");
 const { autoCreateMarkets, autoSeedMarkets, setMarketCreatedCallback } = require("./keeper/auto-market");
@@ -95,24 +59,8 @@ app.get("/api/scores/snapshot/:fixtureId", async (req, res) => {
     // Prefer OUR score store first — it's built from the same SSE feed but
     // with sticky phase/score fixes applied, and it survives TxLINE clearing
     // finished matches.
-    // Check persisted store first (survives restarts, has past matches)
-    const persisted = persistedScores[fixtureId];
-    if (persisted) {
-      return res.json([{
-        FixtureId: fixtureId,
-        Participant1Goals: persisted.homeGoals,
-        Participant2Goals: persisted.awayGoals,
-        StatusId: PERIOD_TO_STATUS[persisted.period] ?? 5,
-        Clock: { Seconds: (persisted.minute || 90) * 60 },
-        Stats: { "1": persisted.homeGoals, "2": persisted.awayGoals }
-      }]);
-    }
-
-    // Fall back to in-memory store (current match)
     const stored = getLastScore(fixtureId);
     if (stored) {
-      // Persist for future restarts
-      persistScore(fixtureId, stored);
       return res.json([{
         FixtureId: fixtureId,
         Participant1Goals: stored.homeGoals,
@@ -194,7 +142,6 @@ async function start() {
 
     stream.connect({
       onScoreUpdate: (score) => {
-        persistScore(score.fixtureId, score);
         sockets.broadcastScore(score.fixtureId, score);
       },
       onMatchEvent: (event) => {
@@ -339,21 +286,6 @@ async function loadMarketList() {
   return Array.from(byId.values());
 }
 
-// Fetch final score from backend snapshot
-async function fetchScore(fixtureId) {
-  try {
-    const res = await fetch(`${BACKEND}/api/scores/snapshot/${fixtureId}`);
-    const data = await res.json();
-    if (Array.isArray(data) && data.length > 0) {
-      const s = data[data.length - 1];
-      const home = s.Participant1Goals ?? s.HomeGoals ?? s.homeGoals ?? null;
-      const away = s.Participant2Goals ?? s.AwayGoals ?? s.awayGoals ?? null;
-      if (home !== null && away !== null) return `${home}-${away}`;
-    }
-  } catch (e) {}
-  return null;
-}
-
 export default function MyPositions() {
   const { publicKey, connected } = useWallet();
   const [positions, setPositions] = useState([]);
@@ -390,12 +322,6 @@ export default function MyPositions() {
         const canClaim = won && !claimed;
         const canRefund = market.status === 3 && !claimed;
 
-        // Fetch score for settled/locked markets
-        let score = null;
-        if (market.status === 2 || market.status === 1) {
-          score = await fetchScore(m.fixtureId);
-        }
-
         found.push({
           ...m,
           question: m.question || market.question,
@@ -408,7 +334,6 @@ export default function MyPositions() {
           canRefund,
           status: market.status,
           winningSide: market.winningSide,
-          score,
         });
       } catch(e) {}
     }
@@ -440,13 +365,7 @@ export default function MyPositions() {
       {positions.map((p, i) => (
         <div key={i} className={"position-card " + (p.canClaim || p.canRefund ? "can-claim" : "")}>
 
-          {/* Match header with score */}
-          <div className="position-match-header">
-            <span className="position-match">{p.name}</span>
-            {p.score && (
-              <span className="position-score">{p.score}</span>
-            )}
-          </div>
+          <div className="position-match">{p.name}</div>
 
           <div className="position-question">{p.question}</div>
 
@@ -763,27 +682,6 @@ code { background: #1e1e2e; padding: 2px 4px; border-radius: 4px; font-size: 11p
 .result-win { color: #4ade80; font-weight: 700; }
 .result-loss { color: #f87171; }
 .result-claimed { color: #888; }
-
-/* Position card score display */
-.position-match-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-.position-score {
-  background: #1a1a2e;
-  color: #00ff88;
-  font-size: 16px;
-  font-weight: 700;
-  font-family: monospace;
-  padding: 2px 10px;
-  border-radius: 6px;
-  border: 1px solid #00ff8844;
-  white-space: nowrap;
-  letter-spacing: 2px;
-}
 """
 
 
@@ -794,7 +692,7 @@ def main():
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f: f.write(content)
         print("wrote", path)
-    print("Done. Run: git add -A && git commit -m \'fix: persist scores, show final score in My Positions\' && git push")
+    print("Done. Run: git add -A && git commit -m \'revert: remove score display from My Positions\' && git push")
 
 
 if __name__ == "__main__": main()

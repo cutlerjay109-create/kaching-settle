@@ -38,21 +38,6 @@ async function loadMarketList() {
   return Array.from(byId.values());
 }
 
-// Fetch final score from backend snapshot
-async function fetchScore(fixtureId) {
-  try {
-    const res = await fetch(`${BACKEND}/api/scores/snapshot/${fixtureId}`);
-    const data = await res.json();
-    if (Array.isArray(data) && data.length > 0) {
-      const s = data[data.length - 1];
-      const home = s.Participant1Goals ?? s.HomeGoals ?? s.homeGoals ?? null;
-      const away = s.Participant2Goals ?? s.AwayGoals ?? s.awayGoals ?? null;
-      if (home !== null && away !== null) return `${home}-${away}`;
-    }
-  } catch (e) {}
-  return null;
-}
-
 export default function MyPositions() {
   const { publicKey, connected } = useWallet();
   const [positions, setPositions] = useState([]);
@@ -89,12 +74,6 @@ export default function MyPositions() {
         const canClaim = won && !claimed;
         const canRefund = market.status === 3 && !claimed;
 
-        // Fetch score for settled/locked markets
-        let score = null;
-        if (market.status === 2 || market.status === 1) {
-          score = await fetchScore(m.fixtureId);
-        }
-
         found.push({
           ...m,
           question: m.question || market.question,
@@ -107,7 +86,6 @@ export default function MyPositions() {
           canRefund,
           status: market.status,
           winningSide: market.winningSide,
-          score,
         });
       } catch(e) {}
     }
@@ -139,13 +117,7 @@ export default function MyPositions() {
       {positions.map((p, i) => (
         <div key={i} className={"position-card " + (p.canClaim || p.canRefund ? "can-claim" : "")}>
 
-          {/* Match header with score */}
-          <div className="position-match-header">
-            <span className="position-match">{p.name}</span>
-            {p.score && (
-              <span className="position-score">{p.score}</span>
-            )}
-          </div>
+          <div className="position-match">{p.name}</div>
 
           <div className="position-question">{p.question}</div>
 
