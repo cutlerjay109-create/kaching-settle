@@ -1042,13 +1042,27 @@ module.exports = { connect, disconnect, getLastScore };
 """
 
 FILES['backend/src/txline/validate.js'] = r"""// backend/src/txline/validate.js
-// Fetches TxLINE's cryptographic stat-validation proof for a fixture.
-// Calls validateStat().view() on the Txoracle program — returns true/false.
+// Verifies a TxLINE stat proof using the Txoracle on-chain program.
+// Uses .simulate() (not .view() — not supported) and reads the result
+// from the transaction logs.
 //
-// Fix: the daily scores root PDA is now derived from the PROOF's target
-// timestamp, not from "today". Previously, any settlement retried after
-// midnight UTC pointed at the wrong day's root and failed forever.
-// (Falls back to today's root if the proof-day root account is missing.)
+// All types are mapped exactly from backend/idl/txoracle.json:
+//   validate_stat(ts: i64, fixture_summary: ScoresBatchSummary,
+//     fixture_proof: Vec<ProofNode>, main_tree_proof: Vec<ProofNode>,
+//     predicate: TraderPredicate, stat_a: StatTerm,
+//     stat_b: Option<StatTerm>, op: Option<BinaryOp>)
+//
+//   ScoresBatchSummary { fixture_id: i64, update_stats: ScoresUpdateStats,
+//                        events_sub_tree_root: [u8;32] }
+//   ScoresUpdateStats  { update_count: i32, min_timestamp: i64, max_timestamp: i64 }
+//   TraderPredicate    { threshold: i32, comparison: Comparison }
+//   Comparison         enum { GreaterThan, LessThan, EqualTo }
+//   StatTerm           { stat_to_prove: ScoreStat, event_stat_root: [u8;32],
+//                        stat_proof: Vec<ProofNode> }
+//   ScoreStat          { key: u32, value: i32, period: i32 }
+//   ProofNode          { hash: [u8;32], is_right_sibling: bool }
+//
+//   account: daily_scores_merkle_roots  (camelCase: dailyScoresMerkleRoots)
 
 const axios = require("axios");
 const anchor = require("@coral-xyz/anchor");
@@ -1061,7 +1075,6 @@ const path = require("path");
 
 let _program = null;
 
-// Load the Txoracle program once
 async function getProgram() {
   if (_program) return _program;
 
@@ -1069,10 +1082,13 @@ async function getProgram() {
   const idlPath = path.join(__dirname, "../../idl/txoracle.json");
   const idl = JSON.parse(fs.readFileSync(idlPath, "utf8"));
 
-  // Read-only provider — no wallet needed for .view() calls
   const provider = new anchor.AnchorProvider(
     connection,
-    { publicKey: PublicKey.default, signTransaction: async t => t, signAllTransactions: async t => t },
+    {
+      publicKey: PublicKey.default,
+      signTransaction: async t => t,
+      signAllTransactions: async t => t,
+    },
     { commitment: "confirmed" }
   );
 
@@ -1080,7 +1096,6 @@ async function getProgram() {
   return _program;
 }
 
-// Fetch the validation proof from TxLINE API
 async function fetchProof(fixtureId, statKey, seq = 1) {
   try {
     const res = await axios.get(`${config.txline.host}/api/scores/stat-validation`, {
@@ -1094,64 +1109,64 @@ async function fetchProof(fixtureId, statKey, seq = 1) {
   }
 }
 
-// Helper: convert hex/base64/array/null to 32-byte Buffer
-// TxLINE sometimes returns null or missing fields for empty proof nodes —
-// treat those as 32 zero bytes rather than crashing.
-function toBytes32(val) {
-  if (val === null || val === undefined) return Buffer.alloc(32);
-  if (Array.isArray(val)) return Buffer.from(val);
-  if (typeof val === "string") {
-    if (!val) return Buffer.alloc(32);
-    if (val.startsWith("0x") || val.length === 64) return Buffer.from(val.replace("0x",""), "hex");
-    return Buffer.from(val, "base64");
+// Convert any hash representation to a plain number[] of length 32
+// (Anchor expects [u8;32] as a JS number array, NOT a Buffer or Uint8Array)
+function toU8Array32(val) {
+  if (val === null || val === undefined) return Array(32).fill(0);
+  let buf;
+  if (Array.isArray(val)) {
+    buf = val;
+  } else if (typeof val === "string") {
+    if (!val) return Array(32).fill(0);
+    if (val.startsWith("0x") || val.length === 64) {
+      buf = Array.from(Buffer.from(val.replace("0x", ""), "hex"));
+    } else {
+      buf = Array.from(Buffer.from(val, "base64"));
+    }
+  } else if (Buffer.isBuffer(val) || val instanceof Uint8Array) {
+    buf = Array.from(val);
+  } else {
+    buf = Array(32).fill(0);
   }
-  if (Buffer.isBuffer(val)) return val;
-  return Buffer.from(val);
+  // Pad or trim to exactly 32
+  if (buf.length < 32) return [...buf, ...Array(32 - buf.length).fill(0)];
+  if (buf.length > 32) return buf.slice(0, 32);
+  return buf.map(Number);
 }
 
-function dailyScoresRootPda(epochDay) {
-  // Seed confirmed from IDL account name: "daily_scores_merkle_roots"
+// Safe BN: handles numbers, strings, existing BNs, undefined
+function toBN(val) {
+  if (val === null || val === undefined) return new anchor.BN(0);
+  if (anchor.BN.isBN(val)) return val;
+  if (typeof val === "bigint") return new anchor.BN(val.toString());
+  return new anchor.BN(String(val));
+}
+
+// Map a ProofNode from the proof response
+// IDL: { hash: [u8;32], is_right_sibling: bool }
+function mapNode(node) {
+  if (!node) return { hash: Array(32).fill(0), isRightSibling: false };
+  return {
+    hash: toU8Array32(node.hash),
+    isRightSibling: node.isRightSibling ?? node.is_right_sibling ?? false,
+  };
+}
+
+// PDA for the daily scores merkle roots account
+function dailyScoresMerkleRootsPda(epochDay) {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("daily_scores_merkle_roots"), Buffer.from([epochDay & 0xff, (epochDay >> 8) & 0xff])],
+    [
+      Buffer.from("daily_scores_merkle_roots"),
+      Buffer.from([epochDay & 0xff, (epochDay >> 8) & 0xff]),
+    ],
     new PublicKey(config.txline.programId)
   )[0];
 }
 
-// Parse the boolean result from program logs.
-// The Txoracle program emits "Program log: <true|false>" or
-// "Program return: <base64>" depending on version.
-// We check both patterns.
-function parseResultFromLogs(logs) {
-  if (!logs || !logs.length) return null;
-  for (const line of logs) {
-    // "Program log: true" / "Program log: false"
-    if (/program log:\s*true/i.test(line)) return true;
-    if (/program log:\s*false/i.test(line)) return false;
-    // "Program return: <programId> <base64bool>"
-    const m = line.match(/Program return:\S*\s+(\S+)/);
-    if (m) {
-      try {
-        const buf = Buffer.from(m[1], "base64");
-        return buf[0] !== 0;
-      } catch(e) {}
-    }
-    // "Program data: <base64>"
-    const d = line.match(/Program data:\s+(\S+)/);
-    if (d) {
-      try {
-        const buf = Buffer.from(d[1], "base64");
-        return buf[0] !== 0;
-      } catch(e) {}
-    }
-  }
-  return null;
-}
-
-// Epoch days to try, in order: the proof's day first, then today.
+// Epoch days to try: proof's day first, then today (handles midnight boundary)
 function candidateEpochDays(targetTs) {
   const days = [];
   if (targetTs) {
-    // targetTs may arrive in ms or seconds — normalize to ms
     const tsMs = targetTs > 1e12 ? targetTs : targetTs * 1000;
     days.push(Math.floor(tsMs / constants.MS_PER_DAY));
   }
@@ -1160,8 +1175,25 @@ function candidateEpochDays(targetTs) {
   return days;
 }
 
-// Main: verify a stat on-chain using TxLINE's Merkle proof
-// Returns { result: bool, proof: object } — proof is stored as receipt
+// Parse the boolean result from program simulation logs
+function parseResultFromLogs(logs) {
+  if (!logs || !logs.length) return null;
+  for (const line of logs) {
+    if (/program log:\s*true/i.test(line)) return true;
+    if (/program log:\s*false/i.test(line)) return false;
+    // "Program return: <programId> <base64>"
+    const m = line.match(/Program return:\S*\s+(\S+)/);
+    if (m) {
+      try { return Buffer.from(m[1], "base64")[0] !== 0; } catch(e) {}
+    }
+    const d = line.match(/Program data:\s+(\S+)/);
+    if (d) {
+      try { return Buffer.from(d[1], "base64")[0] !== 0; } catch(e) {}
+    }
+  }
+  return null;
+}
+
 async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
   console.log(`[validate] Verifying fixture ${fixtureId} statKey ${statKey}...`);
 
@@ -1170,74 +1202,75 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
 
   const program = await getProgram();
 
-  // Build the predicate — e.g. { greaterThan: {} } means "stat > threshold"
+  // ── TraderPredicate ─────────────────────────────────────
+  // threshold is i32 in the IDL
   const predicate = {
-    threshold,
-    comparison: comparison === "greaterThan" ? { greaterThan: {} } : { lessThan: {} },
+    threshold: Number(threshold) || 0,
+    comparison: comparison === "lessThan" ? { lessThan: {} } : { greaterThan: {} },
   };
 
-  // Build stat1 argument from proof
-  // Safe node mapper — guards against null nodes or missing hash fields
-  function mapProofNode(node) {
-    if (!node) return { hash: Array.from(Buffer.alloc(32)), isRightSibling: false };
-    return {
-      hash: Array.from(toBytes32(node.hash)),
-      isRightSibling: node.isRightSibling ?? false,
-    };
-  }
-
-  const stat1 = {
-    statToProve: proof.statToProve,
-    eventStatRoot: toBytes32(proof.eventStatRoot),
-    statProof: (proof.statProof || []).map(mapProofNode),
-  };
-
-  // Build fixtureSummary
+  // ── ScoresBatchSummary ──────────────────────────────────
   const summary = proof.summary || {};
-  const updateStats = summary.updateStats || {};
+  const us = summary.updateStats || summary.update_stats || {};
   const fixtureSummary = {
-    fixtureId: summary.fixtureId ?? proof.fixtureId,
+    fixtureId: toBN(summary.fixtureId ?? summary.fixture_id ?? fixtureId),
     updateStats: {
-      updateCount: updateStats.updateCount ?? 0,
-      minTimestamp: new anchor.BN(updateStats.minTimestamp ?? 0),
-      maxTimestamp: new anchor.BN(updateStats.maxTimestamp ?? 0),
+      updateCount: Number(us.updateCount ?? us.update_count ?? 0),
+      minTimestamp: toBN(us.minTimestamp ?? us.min_timestamp ?? 0),
+      maxTimestamp: toBN(us.maxTimestamp ?? us.max_timestamp ?? 0),
     },
-    eventsSubTreeRoot: toBytes32(summary.eventsSubTreeRoot),
+    eventsSubTreeRoot: toU8Array32(summary.eventsSubTreeRoot ?? summary.events_sub_tree_root),
   };
 
-  // Fixture proof path
-  const fixtureProof = (proof.subTreeProof || []).map(mapProofNode);
+  // ── StatTerm (statA) ────────────────────────────────────
+  // IDL field name: stat_a -> statA in camelCase
+  // Inner ScoreStat: { key: u32, value: i32, period: i32 }
+  const stp = proof.statToProve || proof.stat_to_prove || {};
+  const statA = {
+    statToProve: {
+      key: Number(stp.key ?? statKey ?? 0),
+      value: Number(stp.value ?? 0),
+      period: Number(stp.period ?? 0),
+    },
+    eventStatRoot: toU8Array32(proof.eventStatRoot ?? proof.event_stat_root),
+    statProof: (proof.statProof || proof.stat_proof || []).map(mapNode),
+  };
 
-  // Main tree proof path
-  const mainTreeProof = (proof.mainTreeProof || []).map(mapProofNode);
+  // ── Proof paths ─────────────────────────────────────────
+  const fixtureProof = (proof.subTreeProof || proof.sub_tree_proof || []).map(mapNode);
+  const mainTreeProof = (proof.mainTreeProof || proof.main_tree_proof || []).map(mapNode);
+
+  // ── targetTs ────────────────────────────────────────────
+  const targetTs = toBN(proof.targetTs ?? proof.target_ts ?? 0);
 
   let lastError = null;
 
-  for (const epochDay of candidateEpochDays(proof.targetTs)) {
-    const dailyScoresRoot = dailyScoresRootPda(epochDay);
+  for (const epochDay of candidateEpochDays(proof.targetTs ?? proof.target_ts)) {
+    const dailyScoresMerkleRoots = dailyScoresMerkleRootsPda(epochDay);
+
     try {
-      // .view() is not supported by this program — use .simulate() and
-      // parse the boolean result from the transaction logs instead.
       const sim = await program.methods
         .validateStat(
-          new anchor.BN(proof.targetTs),
+          targetTs,
           fixtureSummary,
           fixtureProof,
           mainTreeProof,
           predicate,
-          stat1,
-          null, // stat2 — not needed for single-stat markets
-          null  // op
+          statA,
+          null,  // stat_b — not needed
+          null   // op — not needed
         )
-        .accounts({ dailyScoresMerkleRoots: dailyScoresRoot })
+        .accounts({ dailyScoresMerkleRoots })
         .simulate({ commitment: "confirmed" });
 
-      const logs = sim?.raw || sim?.events || sim?.logs || [];
-      console.log("[validate] Simulation logs:", logs.slice(0, 10));
+      const logs = sim?.raw || [];
+      console.log("[validate] Sim logs:", JSON.stringify(logs.slice(0, 8)));
 
       const result = parseResultFromLogs(logs);
       if (result === null) {
-        throw new Error("Could not parse boolean result from simulation logs: " + JSON.stringify(logs.slice(0,5)));
+        throw new Error(
+          "Could not parse result from logs: " + JSON.stringify(logs.slice(0, 5))
+        );
       }
 
       console.log(`[validate] Result: ${result} (epochDay ${epochDay})`);
@@ -1248,8 +1281,8 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
           statKey,
           threshold,
           comparison,
-          targetTs: proof.targetTs,
-          dailyScoresRoot: dailyScoresRoot.toBase58(),
+          targetTs: String(proof.targetTs ?? proof.target_ts ?? 0),
+          dailyScoresMerkleRoots: dailyScoresMerkleRoots.toBase58(),
         },
       };
     } catch (e) {
@@ -2675,6 +2708,7 @@ def main():
         with open(path, "w") as f: f.write(content)
         print("wrote", path, f"({len(content)} bytes)")
     print("\nDone.")
-    print("Push: git add -A && git commit -m 'fix: correct account key dailyScoresMerkleRoots' && git push")
+    print("Push: git add -A && git commit -m \'fix: validate.js IDL types\' && git push")
+
 
 if __name__ == "__main__": main()
