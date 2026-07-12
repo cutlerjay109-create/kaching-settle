@@ -39,12 +39,19 @@ async function getProgram() {
   const idlPath = path.join(__dirname, "../../idl/txoracle.json");
   const idl = JSON.parse(fs.readFileSync(idlPath, "utf8"));
 
+  // simulate() needs a real fee payer with SOL — use the keeper wallet.
+  // No transaction is actually sent; this is read-only simulation only.
+  const bs58 = require("bs58");
+  const { Keypair } = require("@solana/web3.js");
+  const decoder = bs58.default || bs58;
+  const wallet = Keypair.fromSecretKey(decoder.decode(process.env.WALLET_KEYPAIR.trim()));
+
   const provider = new anchor.AnchorProvider(
     connection,
     {
-      publicKey: PublicKey.default,
-      signTransaction: async t => t,
-      signAllTransactions: async t => t,
+      publicKey: wallet.publicKey,
+      signTransaction: async (tx) => { tx.sign(wallet); return tx; },
+      signAllTransactions: async (txs) => { txs.forEach(t => t.sign(wallet)); return txs; },
     },
     { commitment: "confirmed" }
   );

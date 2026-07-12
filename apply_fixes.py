@@ -1082,12 +1082,19 @@ async function getProgram() {
   const idlPath = path.join(__dirname, "../../idl/txoracle.json");
   const idl = JSON.parse(fs.readFileSync(idlPath, "utf8"));
 
+  // simulate() needs a real fee payer with SOL — use the keeper wallet.
+  // No transaction is actually sent; this is read-only simulation only.
+  const bs58 = require("bs58");
+  const { Keypair } = require("@solana/web3.js");
+  const decoder = bs58.default || bs58;
+  const wallet = Keypair.fromSecretKey(decoder.decode(process.env.WALLET_KEYPAIR.trim()));
+
   const provider = new anchor.AnchorProvider(
     connection,
     {
-      publicKey: PublicKey.default,
-      signTransaction: async t => t,
-      signAllTransactions: async t => t,
+      publicKey: wallet.publicKey,
+      signTransaction: async (tx) => { tx.sign(wallet); return tx; },
+      signAllTransactions: async (txs) => { txs.forEach(t => t.sign(wallet)); return txs; },
     },
     { commitment: "confirmed" }
   );
@@ -2713,7 +2720,7 @@ def main():
         with open(path, "w") as f: f.write(content)
         print("wrote", path, f"({len(content)} bytes)")
     print("\nDone.")
-    print("Push: git add -A && git commit -m \'fix: full error logging\' && git push")
+    print("Push: git add -A && git commit -m \'fix: keeper wallet as simulate fee payer\' && git push")
 
 
 if __name__ == "__main__": main()
