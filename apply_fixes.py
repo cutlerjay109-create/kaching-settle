@@ -1195,12 +1195,10 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
 
   const proof = await fetchProof(fixtureId, statKey);
   console.log("[validate] Proof fetched, ts:", proof.ts);
-  console.log("[validate] summary keys:", Object.keys(proof.summary || {}));
-  console.log("[validate] summary:", JSON.stringify({
-    fixtureId: proof.summary?.fixtureId ?? proof.summary?.fixture_id,
-    updateStats: proof.summary?.updateStats ?? proof.summary?.update_stats,
-    eventsSubTreeRoot: "[bytes]",
-  }));
+  console.log("[validate] statToProve:", JSON.stringify(proof.statToProve ?? proof.stat_to_prove));
+  const _sum = proof.summary || {};
+  console.log("[validate] summary updateStats:", JSON.stringify(_sum.updateStats ?? _sum.update_stats));
+  console.log("[validate] eventStatsSubTreeRoot present:", !!(_sum.eventStatsSubTreeRoot ?? _sum.eventsSubTreeRoot ?? _sum.events_sub_tree_root));
 
   const program = await getProgram();
 
@@ -1252,10 +1250,11 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
   const usTs = proof.summary?.updateStats || proof.summary?.update_stats || {};
   // All candidate timestamps — the correct one seeds both the PDA and passes
   // the TimestampMismatch check inside the program.
+  // minTimestamp gets furthest (passes ConstraintSeeds + TimestampMismatch), try it first
   const tsValues = [
-    proof.ts,
-    usTs.maxTimestamp ?? usTs.max_timestamp,
     usTs.minTimestamp ?? usTs.min_timestamp,
+    usTs.maxTimestamp ?? usTs.max_timestamp,
+    proof.ts,
   ].filter(v => v !== undefined && v !== null)
    .map(v => new anchor.BN(String(v)));
 
@@ -2753,7 +2752,7 @@ def main():
         with open(path, "w") as f: f.write(content)
         print("wrote", path, f"({len(content)} bytes)")
     print("\nDone.")
-    print("Push: git add -A && git commit -m \'fix: full sim error log + correct field name\' && git push")
+    print("Push: git add -A && git commit -m \'debug: log statToProve and try minTimestamp first\' && git push")
 
 
 if __name__ == "__main__": main()
