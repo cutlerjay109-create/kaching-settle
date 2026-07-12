@@ -17,6 +17,43 @@ const CORS_ORIGINS = [
 const auth = require("./txline/auth");
 const stream = require("./txline/stream");
 const { getLastScore } = require("./txline/stream");
+const path = require("path");
+const fs = require("fs");
+
+// Persistent score store — survives Railway restarts
+// Scores are written here by the SSE stream and manually seeded for past matches.
+const SCORE_STORE_PATH = path.join(__dirname, "../../data/scores.json");
+
+function loadPersistedScores() {
+  try {
+    if (fs.existsSync(SCORE_STORE_PATH)) {
+      return JSON.parse(fs.readFileSync(SCORE_STORE_PATH, "utf8"));
+    }
+  } catch(e) {}
+  return {};
+}
+
+function savePersistedScores(store) {
+  try {
+    fs.mkdirSync(path.dirname(SCORE_STORE_PATH), { recursive: true });
+    fs.writeFileSync(SCORE_STORE_PATH, JSON.stringify(store, null, 2));
+  } catch(e) {}
+}
+
+// Seed known final scores for completed matches
+// Format: { fixtureId: { homeGoals, awayGoals, period: 5 } }
+const KNOWN_SCORES = {
+  18213979: { homeGoals: 1, awayGoals: 2, period: 5, minute: 90 }, // Norway 1-2 England
+  18222446: { homeGoals: 1, awayGoals: 2, period: 5, minute: 90 }, // Argentina 1-2 Switzerland
+};
+
+const persistedScores = { ...KNOWN_SCORES, ...loadPersistedScores() };
+
+// Persist score when SSE stream updates it
+function persistScore(fixtureId, score) {
+  persistedScores[fixtureId] = score;
+  savePersistedScores(persistedScores);
+}
 const { fetchFixtures, getUpcoming } = require("./txline/fixtures");
 const keeper = require("./keeper/settle-trigger");
 const { autoCreateMarkets, autoSeedMarkets, setMarketCreatedCallback } = require("./keeper/auto-market");
@@ -53,8 +90,24 @@ app.get("/api/scores/snapshot/:fixtureId", async (req, res) => {
     // Prefer OUR score store first — it's built from the same SSE feed but
     // with sticky phase/score fixes applied, and it survives TxLINE clearing
     // finished matches.
+    // Check persisted store first (survives restarts, has past matches)
+    const persisted = persistedScores[fixtureId];
+    if (persisted) {
+      return res.json([{
+        FixtureId: fixtureId,
+        Participant1Goals: persisted.homeGoals,
+        Participant2Goals: persisted.awayGoals,
+        StatusId: PERIOD_TO_STATUS[persisted.period] ?? 5,
+        Clock: { Seconds: (persisted.minute || 90) * 60 },
+        Stats: { "1": persisted.homeGoals, "2": persisted.awayGoals }
+      }]);
+    }
+
+    // Fall back to in-memory store (current match)
     const stored = getLastScore(fixtureId);
     if (stored) {
+      // Persist for future restarts
+      persistScore(fixtureId, stored);
       return res.json([{
         FixtureId: fixtureId,
         Participant1Goals: stored.homeGoals,
@@ -136,6 +189,7 @@ async function start() {
 
     stream.connect({
       onScoreUpdate: (score) => {
+        persistScore(score.fixtureId, score);
         sockets.broadcastScore(score.fixtureId, score);
       },
       onMatchEvent: (event) => {
