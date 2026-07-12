@@ -177,7 +177,7 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
       minTimestamp: toBN(us.minTimestamp ?? us.min_timestamp ?? 0),
       maxTimestamp: toBN(us.maxTimestamp ?? us.max_timestamp ?? 0),
     },
-    eventsSubTreeRoot: toU8Array32(summary.eventsSubTreeRoot ?? summary.events_sub_tree_root),
+    eventsSubTreeRoot: toU8Array32(summary.eventStatsSubTreeRoot ?? summary.eventsSubTreeRoot ?? summary.events_sub_tree_root ?? summary.event_stats_sub_tree_root),
   };
 
   // StatTerm (statA)
@@ -284,8 +284,9 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
       console.log("[validate] Logs:", JSON.stringify(logs.slice(0,5)));
       lastErr = new Error("Could not parse result: " + JSON.stringify(logs.slice(0,5)));
     } catch (e) {
-      const detail = e?.simulationResponse
-        ? JSON.stringify(e.simulationResponse.logs?.slice(0,3))
+      const simResp = e?.simulationResponse;
+      const detail = simResp
+        ? JSON.stringify({ err: simResp.err, logs: simResp.logs })
         : (e.message || String(e));
       console.error(`[validate] ts=${tsVal.toString()} failed: ${detail}`);
       lastErr = e;
