@@ -43,13 +43,26 @@ async function fetchProofRaw(fixtureId, statKey, seq) {
   return res.data;
 }
 
-// Find the last available seq for a given statKey
+// Find the last available seq for a given statKey.
+// Matches can have 200+ sequences — step by 10 to find the range fast,
+// then walk back one-by-one to find the exact last seq.
 async function findLastSeq(fixtureId, statKey) {
   let last = 0;
-  for (let s = 0; s <= 30; s++) {
-    try { await fetchProofRaw(fixtureId, statKey, s); last = s; }
-    catch(e) { if (s > 2) break; }
+  // Step 1: jump by 10 to find upper bound
+  for (let s = 0; s <= 300; s += 10) {
+    try {
+      await fetchProofRaw(fixtureId, statKey, s);
+      last = s;
+    } catch(e) {
+      // s failed — walk back from s-9 to s-1 to find exact last
+      for (let s2 = s - 9; s2 < s; s2++) {
+        try { await fetchProofRaw(fixtureId, statKey, s2); last = s2; }
+        catch(e2) { break; }
+      }
+      break;
+    }
   }
+  console.log(`[validate] Last seq for fixture ${fixtureId} statKey ${statKey}: ${last}`);
   return last;
 }
 
