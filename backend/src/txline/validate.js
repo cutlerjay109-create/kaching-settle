@@ -51,13 +51,18 @@ async function fetchProof(fixtureId, statKey, seq = 1) {
   }
 }
 
-// Helper: convert hex/base64/array to 32-byte Buffer
+// Helper: convert hex/base64/array/null to 32-byte Buffer
+// TxLINE sometimes returns null or missing fields for empty proof nodes —
+// treat those as 32 zero bytes rather than crashing.
 function toBytes32(val) {
+  if (val === null || val === undefined) return Buffer.alloc(32);
   if (Array.isArray(val)) return Buffer.from(val);
   if (typeof val === "string") {
+    if (!val) return Buffer.alloc(32);
     if (val.startsWith("0x") || val.length === 64) return Buffer.from(val.replace("0x",""), "hex");
     return Buffer.from(val, "base64");
   }
+  if (Buffer.isBuffer(val)) return val;
   return Buffer.from(val);
 }
 
@@ -98,37 +103,39 @@ async function verifyStat({ fixtureId, statKey, threshold, comparison }) {
   };
 
   // Build stat1 argument from proof
+  // Safe node mapper — guards against null nodes or missing hash fields
+  function mapProofNode(node) {
+    if (!node) return { hash: Array.from(Buffer.alloc(32)), isRightSibling: false };
+    return {
+      hash: Array.from(toBytes32(node.hash)),
+      isRightSibling: node.isRightSibling ?? false,
+    };
+  }
+
   const stat1 = {
     statToProve: proof.statToProve,
     eventStatRoot: toBytes32(proof.eventStatRoot),
-    statProof: proof.statProof.map(node => ({
-      hash: Array.from(toBytes32(node.hash)),
-      isRightSibling: node.isRightSibling,
-    })),
+    statProof: (proof.statProof || []).map(mapProofNode),
   };
 
   // Build fixtureSummary
+  const summary = proof.summary || {};
+  const updateStats = summary.updateStats || {};
   const fixtureSummary = {
-    fixtureId: proof.summary.fixtureId,
+    fixtureId: summary.fixtureId ?? proof.fixtureId,
     updateStats: {
-      updateCount: proof.summary.updateStats.updateCount,
-      minTimestamp: new anchor.BN(proof.summary.updateStats.minTimestamp),
-      maxTimestamp: new anchor.BN(proof.summary.updateStats.maxTimestamp),
+      updateCount: updateStats.updateCount ?? 0,
+      minTimestamp: new anchor.BN(updateStats.minTimestamp ?? 0),
+      maxTimestamp: new anchor.BN(updateStats.maxTimestamp ?? 0),
     },
-    eventsSubTreeRoot: toBytes32(proof.summary.eventsSubTreeRoot),
+    eventsSubTreeRoot: toBytes32(summary.eventsSubTreeRoot),
   };
 
   // Fixture proof path
-  const fixtureProof = proof.subTreeProof.map(node => ({
-    hash: Array.from(toBytes32(node.hash)),
-    isRightSibling: node.isRightSibling,
-  }));
+  const fixtureProof = (proof.subTreeProof || []).map(mapProofNode);
 
   // Main tree proof path
-  const mainTreeProof = proof.mainTreeProof.map(node => ({
-    hash: Array.from(toBytes32(node.hash)),
-    isRightSibling: node.isRightSibling,
-  }));
+  const mainTreeProof = (proof.mainTreeProof || []).map(mapProofNode);
 
   let lastError = null;
 
