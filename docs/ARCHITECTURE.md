@@ -52,9 +52,9 @@ GET /api/scores/stat-validation?fixtureId=…&seq=…&statKey=1
         │           statToProve, eventStatRoot, statProof
         ▼
 txoracle.validateStat(targetTs, fixtureSummary, fixtureProof,
-                      mainTreeProof, predicate, stat1).view()
+                      mainTreeProof, predicate, statA).simulate()
         │  verified against TxLINE's on-chain
-        │  ["daily_scores_roots", epochDay] PDA
+        │  dailyScoresMerkleRoots PDA
         ▼
    true / false  ←  cryptographically proven, reproducible by anyone
         │
@@ -84,7 +84,7 @@ The keeper can only *relay* a proof that already verifies against TxLINE's on-ch
 | 6 | `GET /api/scores/snapshot/:fixtureId` | Point-in-time score state |
 | 7 | `GET /api/scores/updates/:fixtureId` | Historical score updates |
 | 8 | `GET /api/scores/stat-validation` | **Merkle proof package for on-chain verification** |
-| 9 | Txoracle `validateStat().view()` | **On-chain proof check vs `daily_scores_roots` PDA** |
+| 9 | Txoracle `validateStat().simulate()` | **On-chain proof check via simulation — result read from logs** |
 
 Every data call carries both required headers: `Authorization: Bearer <jwt>` and `X-Api-Token: <apiToken>`.
 
