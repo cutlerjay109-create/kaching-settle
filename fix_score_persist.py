@@ -1,4 +1,9 @@
-// backend/src/txline/stream.js
+#!/usr/bin/env python3
+import os
+
+FILES = {}
+
+FILES['backend/src/txline/stream.js'] = r"""// backend/src/txline/stream.js
 // Connects to TxLINE live SSE stream.
 //
 // Scores are persisted to data/scores.json so they survive Railway restarts.
@@ -131,3 +136,19 @@ function disconnect() {
 }
 
 module.exports = { connect, disconnect, getLastScore };
+"""
+
+
+def main():
+    if not os.path.isdir("backend"):
+        print("ERROR: run from kaching-settle repo root"); return
+    for path, content in FILES.items():
+        d = os.path.dirname(path)
+        if d: os.makedirs(d, exist_ok=True)
+        with open(path, "w") as f: f.write(content)
+        print("wrote", path)
+    print("Done.")
+    print("Run: git add -A && git commit -m \'fix: persist scores to disk, survive Railway restarts\' && git push")
+
+
+if __name__ == "__main__": main()
