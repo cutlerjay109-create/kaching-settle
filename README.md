@@ -138,10 +138,17 @@ This is the heart of the project — the part most submissions fake with a datab
 Match ends (TxLINE marks fixture complete)
         │
         ▼
-Keeper detects completion via THREE methods:
-  1. TxLINE completed fixtures list
-  2. Past-kickoff fixtures still in feed
-  3. All registered markets 2.5+ hours past kickoff
+Keeper detects completion via TWO layers:
+
+  LAYER 1 — Instant (SSE stream):
+  TxLINE sends StatusId=5 (FT) → onMatchFinished fires
+  → keeper.checkAndSettle() runs immediately
+  → Settlement within seconds of final whistle
+
+  LAYER 2 — 2.5h Fallback (safety net):
+  Every 60s, keeper checks if any market is 2.5h past kickoff
+  Catches anything Layer 1 missed (stream drops, restarts)
+  Also checks: TxLINE completed list · past-kickoff fixtures
         │
         ▼
 Check on-chain vault balances
@@ -307,16 +314,30 @@ Status:        OPEN — accepting deposits until kickoff
 Winning Side:  Not yet decided
 ```
 
-### France vs Spain — Settled market (post July 14)
+### France vs Spain — Settled market ✅
 
-*This section will be updated after the match settles on July 14, 2026.*
+**Raw account data (base64):**
+```
+277VNwDjxppuRhYBAAAAACcAAABXaWxsIEZyYW5jZSBzY29yZSBhIGdvYWwgYWdhaW5zdCBTcGFpbj8w
+h1ZqAAAAAAEAAAAAAAAAAAAAAACAjVsAAAAAAEBCDwAAAAAAAgH1qsS+5oJnOSMsHOnOvBzWxaREGDTH
+Q9I915fru/cddf///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+```
 
+**Decoded:**
 ```
 Fixture ID:    18237038
 Question:      Will France score a goal against Spain?
-Status:        SETTLED ✅  ← to be updated after full time
-Winning Side:  YES / NO    ← decided by TxLINE Merkle proof
+Kickoff:       2026-07-14 19:00:00 UTC
+Stat Key:      1 (Participant1 goals)
+Comparison:    greaterThan 0
+YES Total:     $6.00 USDC  →  1.17x
+NO Total:      $1.00 USDC  →  7.00x
+Status:        SETTLED ✅
+Winning Side:  NO — France scored 0 goals (Spain won 2-0)
+               NO bettor collects full $7.00 pot (7x return)
 ```
+
+*Settled automatically by TxLINE Merkle proof — no human intervention.*
 
 ### What changes at settlement
 
@@ -501,7 +522,7 @@ Most hackathon prediction apps are a scoreboard with a database deciding payouts
 1. **A real keyless vault** — funds no one can touch, including us.
 2. **Proof-gated settlement** — TxLINE's cryptographic result decides winners, verifiably.
 3. **Fully automatic market lifecycle** — every fixture in the feed gets an on-chain market, a kickoff gate, and a keeper watching it, with zero human operations.
-4. **Three-layer completion detection** — keeper catches matches regardless of whether TxLINE keeps them in the feed after they end.
+4. **Instant + fallback settlement detection** — SSE stream triggers settlement within seconds of FT. A 2.5-hour fallback catches anything the stream misses. Funds are never stuck.
 5. **Emergency expiry protection** — funds can never be permanently locked. Markets void automatically 7 days past kickoff if no proof arrives.
 6. **Side integrity enforcement** — one wallet, one side per market. The program rejects conflicting positions on-chain (`SideMismatch`).
 7. **A human face on the cryptography** — an AI pundit explains every settlement in plain language and voice, so a normal football fan understands *why* they got paid.
