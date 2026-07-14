@@ -30,3 +30,4 @@ keypair.json
 backend/src/kaching-beat-the-market
 package-lock.json
 /package.json
+data/
