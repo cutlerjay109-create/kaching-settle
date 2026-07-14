@@ -143,7 +143,9 @@ async function start() {
         sockets.broadcastEvent(event.fixtureId, event);
       },
       onMatchFinished: (fixtureId) => {
-        console.log("[stream] Match finished:", fixtureId);
+        console.log("[stream] Match finished:", fixtureId, "— triggering keeper immediately");
+        // Trigger settlement immediately instead of waiting for the 2.5h fallback
+        keeper.checkAndSettle && keeper.checkAndSettle();
       },
       onSignificantEvent: async (event) => {
         try {
