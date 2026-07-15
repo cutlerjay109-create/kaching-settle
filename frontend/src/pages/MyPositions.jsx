@@ -1,41 +1,19 @@
 import React, { useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { getMarketPda, refund } from "../lib/solana";
+import { getMarketPda, refund, getAllPositions, getMarket } from "../lib/solana";
 import WalletButton from "../components/WalletButton";
 
 const BACKEND = "https://kaching-settle-production.up.railway.app";
 
-const KNOWN_MARKETS = [
-  { fixtureId: 18209181, name: "France vs Morocco", question: "Will France score a goal against Morocco?" },
-  { fixtureId: 18218149, name: "Spain vs Belgium", question: "Will Spain score a goal against Belgium?" },
-  { fixtureId: 18213979, name: "Norway vs England", question: "Will Norway score a goal against England?" },
-  { fixtureId: 18222446, name: "Argentina vs Switzerland", question: "Will Argentina score a goal against Switzerland?" },
-  { fixtureId: 18143850, name: "Vietnam vs Myanmar", question: "Will Vietnam score a goal against Myanmar?" },
-  { fixtureId: 18182808, name: "Australia vs Brazil", question: "Will Australia score a goal against Brazil?" },
-  { fixtureId: 18182864, name: "Australia vs Brazil", question: "Will Australia score a goal against Brazil?" },
-];
-
 const STATUS = { 0: "Open", 1: "Locked", 2: "Settled", 3: "Voided" };
 const SIDE = { 0: "YES", 1: "NO" };
 
-async function loadMarketList() {
-  const byId = new Map();
-  for (const m of KNOWN_MARKETS) byId.set(m.fixtureId, m);
-  try {
-    const res = await fetch(`${BACKEND}/api/markets`);
-    const list = await res.json();
-    if (Array.isArray(list)) {
-      for (const m of list) {
-        if (!m.fixtureId) continue;
-        byId.set(m.fixtureId, {
-          fixtureId: m.fixtureId,
-          name: m.home && m.away ? `${m.home} vs ${m.away}` : (m.question || `Fixture ${m.fixtureId}`),
-          question: m.question || "",
-        });
-      }
-    }
-  } catch (e) {}
-  return Array.from(byId.values());
+// Get team names from market question or backend market list
+async function getMarketName(fixtureId, question) {
+  // Try to parse from question: "Will X score a goal against Y?"
+  const m = (question || "").match(/^Will (.+) score a goal against (.+)\?$/);
+  if (m) return `${m[1]} vs ${m[2]}`;
+  return `Fixture ${fixtureId}`;
 }
 
 export default function MyPositions() {
@@ -50,47 +28,46 @@ export default function MyPositions() {
 
   async function loadPositions() {
     setLoading(true);
-    const { getMarket, getPositionPda, getConnection } = await import("../lib/solana");
-    const connection = getConnection();
-    const markets = await loadMarketList();
-    const found = [];
+    try {
+      // Scan ALL position accounts on-chain for this wallet
+      // No hardcoded list — works for all past and future markets
+      const onChainPositions = await getAllPositions(publicKey.toBase58());
+      console.log("[MyPositions] Found", onChainPositions.length, "positions on-chain");
 
-    for (const m of markets) {
-      try {
-        const market = await getMarket(m.fixtureId);
-        if (!market) continue;
+      const found = [];
+      for (const pos of onChainPositions) {
+        try {
+          const market = await getMarket(pos.fixtureId);
+          if (!market) continue;
 
-        const positionPda = getPositionPda(m.fixtureId, publicKey.toBase58());
-        const info = await connection.getAccountInfo(positionPda);
-        if (!info) continue;
+          const won = market.status === 2 && market.winningSide === pos.side;
+          const canClaim = won && !pos.claimed;
+          const canRefund = market.status === 3 && !pos.claimed;
+          const name = await getMarketName(pos.fixtureId, market.question);
 
-        const d = info.data;
-        let o = 8 + 8 + 32;
-        const side = d.readUInt8(o); o += 1;
-        const amount = Number(d.readBigUInt64LE(o)) / 1e6; o += 8;
-        const claimed = d.readUInt8(o) === 1;
+          found.push({
+            fixtureId: pos.fixtureId,
+            name,
+            question: market.question,
+            market,
+            side: pos.side,
+            amount: pos.amount,
+            claimed: pos.claimed,
+            won,
+            canClaim,
+            canRefund,
+            status: market.status,
+            winningSide: market.winningSide,
+          });
+        } catch(e) {
+          console.error("[MyPositions] Error loading fixture", pos.fixtureId, e.message);
+        }
+      }
 
-        const won = market.status === 2 && market.winningSide === side;
-        const canClaim = won && !claimed;
-        const canRefund = market.status === 3 && !claimed;
-
-        found.push({
-          ...m,
-          question: m.question || market.question,
-          market,
-          side,
-          amount,
-          claimed,
-          won,
-          canClaim,
-          canRefund,
-          status: market.status,
-          winningSide: market.winningSide,
-        });
-      } catch(e) {}
+      setPositions(found);
+    } catch(e) {
+      console.error("[MyPositions] Error:", e.message);
     }
-
-    setPositions(found);
     setLoading(false);
   }
 
@@ -116,9 +93,7 @@ export default function MyPositions() {
       )}
       {positions.map((p, i) => (
         <div key={i} className={"position-card " + (p.canClaim || p.canRefund ? "can-claim" : "")}>
-
           <div className="position-match">{p.name}</div>
-
           <div className="position-question">{p.question}</div>
 
           <div className="position-details">
@@ -239,6 +214,6 @@ function getMarketAddress(fixtureId) {
     const pda = getMarketPda(fixtureId);
     return pda.toBase58();
   } catch(e) {
-    return "9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B";
+    return "";
   }
 }

@@ -232,3 +232,44 @@ export async function getPosition(fixtureId, user) {
 
   return { side, amount, claimed };
 }
+
+// Scan all Position accounts on-chain for a given wallet.
+// This is the permanent solution — no hardcoded market list needed.
+// Works for all past, present, and future markets automatically.
+export async function getAllPositions(userPubkey) {
+  const connection = getConnection();
+  const programId = new PublicKey(IDL.address);
+
+  // Position account discriminator: sha256("account:Position")[0..8]
+  const POSITION_DISC = [170, 188, 143, 228, 122, 64, 247, 208];
+
+  try {
+    const accounts = await connection.getProgramAccounts(programId, {
+      filters: [
+        { dataSize: 58 }, // 8 disc + 8 fixtureId + 32 user + 1 side + 8 amount + 1 claimed
+        { memcmp: { offset: 0, bytes: Buffer.from(POSITION_DISC).toString("base64") } },
+        { memcmp: { offset: 16, bytes: Buffer.from(new PublicKey(userPubkey).toBytes()).toString("base64") } },
+      ],
+      encoding: "base64",
+    });
+
+    const positions = [];
+    for (const { account } of accounts) {
+      try {
+        const raw = account.data;
+        const d = Buffer.isBuffer(raw) ? raw : Buffer.from(raw[0], "base64");
+        let o = 8;
+        const fixtureId = Number(d.readBigUInt64LE(o)); o += 8;
+        o += 32; // skip user pubkey
+        const side = d.readUInt8(o); o += 1;
+        const amount = Number(d.readBigUInt64LE(o)) / 1_000_000; o += 8;
+        const claimed = d.readUInt8(o) === 1;
+        positions.push({ fixtureId, side, amount, claimed });
+      } catch(e) {}
+    }
+    return positions;
+  } catch(e) {
+    console.error("[solana] getAllPositions failed:", e.message);
+    return [];
+  }
+}
