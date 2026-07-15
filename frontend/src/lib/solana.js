@@ -240,24 +240,50 @@ export async function getAllPositions(userPubkey) {
   const connection = getConnection();
   const programId = new PublicKey(IDL.address);
 
-  // Position account discriminator: sha256("account:Position")[0..8]
-  const POSITION_DISC = [170, 188, 143, 228, 122, 64, 247, 208];
+  // Position account layout (from position.rs):
+  // 8 disc + 8 fixture_id + 32 user + 1 side + 8 amount + 1 claimed + 1 bump = 59 bytes
+  // Discriminator: sha256("account:Position")[0..8] = [170,188,143,228,122,64,247,208]
+  //
+  // Solana memcmp.bytes must be base58-encoded.
+  // Use the bs58 library bundled with @solana/web3.js.
+
+  const POSITION_DISC = Buffer.from([170, 188, 143, 228, 122, 64, 247, 208]);
+
+  // Simple base58 encode using the alphabet
+  function toBase58(buf) {
+    const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let digits = [0];
+    for (let i = 0; i < buf.length; i++) {
+      let carry = buf[i];
+      for (let j = 0; j < digits.length; j++) {
+        carry += digits[j] << 8;
+        digits[j] = carry % 58;
+        carry = (carry / 58) | 0;
+      }
+      while (carry > 0) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+    }
+    let str = "";
+    for (let i = 0; i < buf.length && buf[i] === 0; i++) str += "1";
+    for (let i = digits.length - 1; i >= 0; i--) str += ALPHABET[digits[i]];
+    return str;
+  }
 
   try {
+    const userKey = new PublicKey(userPubkey);
     const accounts = await connection.getProgramAccounts(programId, {
       filters: [
-        { dataSize: 58 }, // 8 disc + 8 fixtureId + 32 user + 1 side + 8 amount + 1 claimed
-        { memcmp: { offset: 0, bytes: Buffer.from(POSITION_DISC).toString("base64") } },
-        { memcmp: { offset: 16, bytes: Buffer.from(new PublicKey(userPubkey).toBytes()).toString("base64") } },
+        { dataSize: 59 },
+        { memcmp: { offset: 0,  bytes: toBase58(POSITION_DISC) } },
+        { memcmp: { offset: 16, bytes: userKey.toBase58() } },
       ],
-      encoding: "base64",
     });
+
+    console.log("[solana] getProgramAccounts found", accounts.length, "position accounts");
 
     const positions = [];
     for (const { account } of accounts) {
       try {
-        const raw = account.data;
-        const d = Buffer.isBuffer(raw) ? raw : Buffer.from(raw[0], "base64");
+        const d = account.data;
         let o = 8;
         const fixtureId = Number(d.readBigUInt64LE(o)); o += 8;
         o += 32; // skip user pubkey
