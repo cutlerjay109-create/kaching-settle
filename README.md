@@ -491,6 +491,8 @@ kaching-settle/
 
 8. **`GameState` is always `"scheduled"` even during live play.** Real match phase must be derived from `StatusId` (2=1H, 3=HT, 4=2H, 5=FT) — not the misleading `GameState` field.
 
+9. **FT event not reliably delivered on the SSE stream.** The stream correctly sends `StatusId=5` events during the match, but the final FT event is not guaranteed — TxLINE appears to stop sending events for a fixture as soon as it ends rather than delivering a clean FT signal. We implemented an SSE-triggered instant settlement that works when the event arrives, but cannot rely on it as the primary settlement method. A time-based fallback (1.75h past kickoff) is necessary as the guaranteed settlement path.
+
 ---
 
 ## Security Model
