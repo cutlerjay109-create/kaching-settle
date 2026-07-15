@@ -80,7 +80,7 @@ One sentence: *we built the part everyone else fakes.*
 
 **5 — Winners claim.** Each winner clicks **Claim** once from the market view or the **My Positions** tab. The program computes their proportional share and transfers USDC straight to their wallet, with a Solscan receipt proving exactly why.
 
-**6 — History persists forever.** The My Positions tab reads directly from Solana — not our server. Every bet a user ever placed is visible and claimable days, weeks, or months later, even after the fixture disappears from TxLINE's feed.
+**6 — History persists forever.** The My Positions tab scans all Position accounts on-chain for the connected wallet — not our server, not a hardcoded list. Every bet ever placed is visible and claimable days, weeks, or months later, even after the fixture disappears from TxLINE's feed. New markets appear automatically with no code changes needed.
 
 ---
 
@@ -527,7 +527,7 @@ Most hackathon prediction apps are a scoreboard with a database deciding payouts
 6. **Side integrity enforcement** — one wallet, one side per market. The program rejects conflicting positions on-chain (`SideMismatch`).
 7. **A human face on the cryptography** — an AI pundit explains every settlement in plain language and voice, so a normal football fan understands *why* they got paid.
 8. **The underdog engine** — pool-ratio odds that reward the brave call automatically, displayed live.
-9. **Permanent betting history** — My Positions reads directly from Solana, showing every bet ever placed regardless of whether the fixture still appears in the TxLINE feed.
+9. **Permanent betting history** — My Positions scans all Position accounts on-chain via `getProgramAccounts`, showing every bet a wallet has ever placed — past, present, and future markets — automatically. No hardcoded list. No server dependency. Survives restarts.
 10. **Raw on-chain verifiability** — every market's state is readable as raw bytes. Anyone can decode it with `scripts/decode-market.js`, no API required.
 11. **Multi-authority keeper** — markets created by any wallet settle automatically. Add any signing key via `AUTHORITY_KEYPAIRS` and the keeper picks the right one per market.
 
