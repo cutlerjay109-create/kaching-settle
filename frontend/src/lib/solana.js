@@ -238,7 +238,7 @@ export async function getPosition(fixtureId, user) {
 // Works for all past, present, and future markets automatically.
 export async function getAllPositions(userPubkey) {
   const connection = getConnection();
-  const programId = new PublicKey(IDL.address);
+  const programId = PROGRAM_ID;
 
   // Position account layout (from position.rs):
   // 8 disc + 8 fixture_id + 32 user + 1 side + 8 amount + 1 claimed + 1 bump = 59 bytes
