@@ -11,7 +11,7 @@
 [![Anchor](https://img.shields.io/badge/Anchor-0.30.1-blue)](https://www.anchor-lang.com/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-[Live App](https://kaching-settle-ten.vercel.app) · [Program on Solscan](https://solscan.io/account/9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B?cluster=devnet)
+[Live App](https://kaching-settle-ten.vercel.app) · [Demo Video](https://youtu.be/Qfw7jJF_wmk?si=cFiNl_-zDPZVKXL6) · [Program on Solscan](https://solscan.io/account/9n7ZwcVBKVqSU1SV7y5KzKqF5Ctt6kWCb7Kmm2vVXL5B?cluster=devnet)
 
 </div>
 
